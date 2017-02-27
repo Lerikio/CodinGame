@@ -1,160 +1,124 @@
 package main
 
 import "fmt"
-import "sort"
+
 import "os"
 
-/**
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
- **/
-
-type Factory struct{
-    id int
-    owner int
-    pop int
-    prod int
+// Factory represents all the properties of a factory
+type Factory struct {
+	id               int
+	owner            int
+	pop              int
+	prod             int
+	turnsWithoutProd int
 }
 
-type Troop struct{
-    id int
-    owner int
-    from int
-    to int
-    pop int
-    eta int
+// Troop represents all the properties of a single troop
+type Troop struct {
+	id    int
+	owner int
+	from  int
+	to    int
+	pop   int
+	eta   int
+}
+
+// Bomb represents all the properties of a single bomb
+type Bomb struct {
+	id         int
+	owner      int
+	from       int
+	to         int
+	explodesIn int
+}
+
+// Game is a single object containing all the data representing the state of
+// the game, allowing for easier access and the creation of methods.
+type Game struct {
+	distances      [][]int         // Matrix of distances between factory i and factory j
+	factories      []Factory       // All the factories in the game
+	myFactories    []*Factory      // The Factories I own at this turn
+	theirFactories []*Factory      // All other factories. No difference between ennemy and neutral
+	troops         map[int][]Troop // All the troops in the game, referenced by their destination
+	bombs          map[int][]Bomb  // All the bombs in the game, referenced by their destination
 }
 
 func main() {
-    // factoryCount: the number of factories
-    var factoryCount int
-    fmt.Scan(&factoryCount)
+	// factoryCount: the number of factories
+	var factoryCount int
+	fmt.Scan(&factoryCount)
 
-    // linkCount: the number of links between factories
-    var linkCount int
-    fmt.Scan(&linkCount)
+	// linkCount: the number of links between factories
+	var linkCount int
+	fmt.Scan(&linkCount)
 
-    // Consturcting map
-    factoryMap := make([][]int, factoryCount)
-    allLinks := make([]int, factoryCount*factoryCount)
-    for i := range factoryMap {
-        factoryMap[i], allLinks = allLinks[:factoryCount], allLinks[factoryCount:]
-    }
+	// Creating the Game object
+	var game Game
 
-    for i := 0; i < linkCount; i++ {
-        var factory1, factory2, distance int
-        fmt.Scan(&factory1, &factory2, &distance)
-        factoryMap[factory1][factory2] = distance
-        factoryMap[factory2][factory1] = distance
-    }
-    for {
-        // entityCount: the number of entities (e.g. factories and troops)
-        var entityCount int
-        fmt.Scan(&entityCount)
+	// Constructing map
+	game.distances = make([][]int, factoryCount)
+	allLinks := make([]int, factoryCount*factoryCount)
+	for i := range game.distances {
+		game.distances[i], allLinks = allLinks[:factoryCount], allLinks[factoryCount:]
+	}
+	for i := 0; i < linkCount; i++ {
+		var factory1, factory2, distance int
+		fmt.Scan(&factory1, &factory2, &distance)
+		game.distances[factory1][factory2] = distance
+		game.distances[factory2][factory1] = distance
+	}
 
-        myFactories := make(map[int]Factory)
-        theirFactories := make(map[int]Factory)
-        //neutralFactories := make(map[int]Factory)
+	for {
+		// entityCount: the number of entities (e.g. factories and troops)
+		var entityCount int
+		fmt.Scan(&entityCount)
 
-        myTroops := make(map[int][]Troop)
-        theirTroops := make(map[int][]Troop)
+		game.factories = make([]Factory, factoryCount)
+		game.troops = make(map[int][]Troop)
 
-        for i := 0; i < entityCount; i++ {
-            var entityId int
-            var entityType string
-            var arg1, arg2, arg3, arg4, arg5 int
-            fmt.Scan(&entityId, &entityType, &arg1, &arg2, &arg3, &arg4, &arg5)
+		for i := 0; i < entityCount; i++ {
+			var entityID int
+			var entityType string
+			var arg1, arg2, arg3, arg4, arg5 int
+			fmt.Scan(&entityID, &entityType, &arg1, &arg2, &arg3, &arg4, &arg5)
 
-            if entityType == "FACTORY" {
-                fmt.Fprintln(os.Stderr, "Factory number:", entityId)
-                if arg1 == 1 {
-                    myFactories[entityId] = Factory{entityId, arg1, arg2, arg3}
-                } else {
-                    theirFactories[entityId] = Factory{entityId, arg1, arg2, arg3}
-                //} else {
-                //    neutralFactories[entityId] = Factory{entityId, arg1, arg2, arg3}
-                }
-            } else if entityType == "TROOP" {
-                if arg1 == 1 {
-                    myTroops[arg2] = append(myTroops[arg2], Troop{entityId, arg1, arg2, arg3, arg4, arg5})
-                } else if arg1 == -1 {
-                    theirTroops[arg2] = append(myTroops[arg2], Troop{entityId, arg1, arg2, arg3, arg4, arg5})
-                }
-            }
-        }
+			if entityType == "FACTORY" {
+				fmt.Fprintln(os.Stderr, "Factory number:", entityID)
+				if arg1 == 1 {
+					game.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4}
+					game.myFactories = append(game.myFactories, &game.factories[entityID])
+				} else {
+					game.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4}
+					game.theirFactories = append(game.theirFactories, &game.factories[entityID])
+					//} else {
+					//    neutralFactories[entityID] = Factory{entityID, arg1, arg2, arg3}
+				}
+			} else if entityType == "TROOP" {
+				game.troops[arg3] = append(game.troops[arg3], Troop{entityID, arg1, arg2, arg3, arg4, arg5})
+			} else if entityType == "BOMB" {
+				game.bombs[arg3] = append(game.bombs[arg3], Bomb{entityID, arg1, arg2, arg3, arg4})
+			}
+		}
 
-        var bestGuess [][3]int
+		var bestMove [][3]int
 
-        for _, base := range myFactories {
-            links := make([]int, factoryCount)
-            copy(links, factoryMap[base.id])
+		// fmt.Fprintln(os.Stderr, "Debug messages...")
 
-            mapDistances := make(map[int]int)
-            for index, value := range links {
-                mapDistances[value] = index
-            }
+		if len(bestMove) != 0 {
+			action := ""
+			for i, move := range bestMove {
+				if i == len(bestMove)-1 {
+					action = fmt.Sprint(action, "MOVE ", move[0], move[1], move[2])
+				} else {
+					action = fmt.Sprint(action, "MOVE ", move[0], move[1], move[2], " ; ")
+				}
 
-            sort.Ints(links)
-            //fmt.Fprintln(os.Stderr, "Factory number:", base.id)
+			}
+			fmt.Println(action)
+		} else {
+			// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
+			fmt.Println("WAIT")
+		}
 
-            for _, distance := range links {
-
-                otherId := mapDistances[distance]
-
-                // check if mine
-                _, mine := myFactories[otherId]
-                if mine {
-                    //fmt.Fprintln(os.Stderr, "Is Mine:", otherId)
-                    continue
-                }
-
-                // Check if possible to invade
-                other := theirFactories[otherId]
-                if other.pop >= base.pop - 2 {
-                    //fmt.Fprintln(os.Stderr, "Can't invade:", otherId)
-                    continue
-                }
-
-                // if not mine, check if troops going there from here already
-                troopGoingThere := false
-                for _, troop := range myTroops[base.id] {
-                    if troop.to == otherId {
-                        troopGoingThere = true
-                        break
-                    }
-                }
-                if troopGoingThere {
-                    //fmt.Fprintln(os.Stderr, "Already Invading:", otherId)
-                    continue
-                }
-
-                //fmt.Fprintln(os.Stderr, "Best guess!", otherId, "with", other.pop + 1)
-                bestGuess = append(bestGuess, [3]int{base.id, otherId, other.pop + 1})
-                base.pop -= other.pop + 1
-                //break
-            }
-
-            //if bestGuess[0] != -1 { break }
-        }
-
-        // fmt.Fprintln(os.Stderr, "Debug messages...")
-
-         if len(bestGuess) != 0  {
-            action := ""
-            for i, guess := range bestGuess{
-                if i == len(bestGuess)-1 {
-                    action = fmt.Sprint(action, "MOVE ", guess[0], guess[1], guess[2])
-                } else {
-                    action = fmt.Sprint(action, "MOVE ", guess[0], guess[1], guess[2], " ; ")
-                }
-
-            }
-            fmt.Println(action)
-         } else {
-            // Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
-            fmt.Println("WAIT")
-         }
-
-
-    }
+	}
 }
