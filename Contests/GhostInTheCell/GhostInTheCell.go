@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"os"
 )
 
 // Factory represents all the properties of a factory
@@ -12,6 +13,7 @@ type Factory struct {
 	pop              int
 	prod             int
 	turnsWithoutProd int
+	baryDistance     int
 }
 
 // Troop represents all the properties of a single troop
@@ -47,6 +49,7 @@ type Game struct {
 	score          int             // Score for current simulation. MyCyborgs - TheirCyborgs
 	firstMove      [][4]int        // Move for turn 1 that allowed this configuration
 	distances      [][]int         // Matrix of distances between factory i and factory j
+	proximities    [][]int         // Matrix of the proximities of each factory. Line i is the ordered list of factories closest to factory i
 	factories      []Factory       // All the factories in the game
 	myFactories    []*Factory      // The Factories I own at this turn
 	theirFactories []*Factory      // All other factories. No difference between ennemy and neutral
@@ -54,25 +57,107 @@ type Game struct {
 	bombs          map[int][]Bomb  // All the bombs in the game, referenced by their destination
 }
 
-// Compute the different combinaisons of orders to compute from
-func (game *Game) computeFactoryOrders() [][]int {
-	orders := make([][]int, len(game.theirFactories))
-
-	for index, mainFactory := range game.theirFactories {
-		orders[index] = append(orders[index], mainFactory.id)
-		//fmt.Fprintln(os.Stderr, "Main Factory:", mainFactory.id)
-		for _, myFactory := range game.myFactories {
-			//fmt.Fprintln(os.Stderr, "My Factory:", mainFactory.id)
-			orders[index] = append(orders[index], myFactory.id)
+// Compute the proximity matrix
+func (game *Game) initializeProximities() {
+	game.proximities = make([][]int, len(game.distances[0]))
+	for id := range game.distances[0] {
+		closestToID := make([]int, len(game.distances[0])-1)
+		for index := range closestToID {
+			closestToID[index] = index
 		}
-		for _, otherFactory := range game.theirFactories {
-			if otherFactory.id != mainFactory.id {
-				//fmt.Fprintln(os.Stderr, "Other Factory:", mainFactory.id)
-				orders[index] = append(orders[index], otherFactory.id)
-			}
+		closestToID = game.quicksortFrom(id, closestToID)
+		game.proximities[id] = closestToID[1:]
+	}
+}
+
+func (game *Game) computeBaryDistances() {
+	for index := range game.factories {
+		baryDistance := 0
+		for _, myFactory := range game.myFactories {
+			baryDistance += game.distances[index][myFactory.id]
+		}
+		baryDistance /= len(game.myFactories)
+		game.factories[index].baryDistance = baryDistance
+	}
+}
+
+// Implementation of QuickSort in our specific case
+func (game *Game) quicksortFrom(currentID int, closests []int) []int {
+	if len(closests) < 2 {
+		return closests
+	}
+
+	left, right := 0, len(closests)-1
+	pivotIndex := rand.Int() % len(closests)
+
+	closests[pivotIndex], closests[right] = closests[right], closests[pivotIndex]
+
+	for i := range closests {
+		if game.distances[currentID][closests[i]] <
+			game.distances[currentID][closests[right]] {
+			closests[i], closests[left] = closests[left], closests[i]
+			left++
 		}
 	}
-	return orders
+
+	closests[left], closests[right] = closests[right], closests[left]
+
+	game.quicksortFrom(currentID, closests[:left])
+	game.quicksortFrom(currentID, closests[left+1:])
+
+	return closests
+}
+
+func (game *Game) quicksortBary(baryFactories []int) []int {
+	if len(baryFactories) < 2 {
+		return baryFactories
+	}
+	left, right := 0, len(baryFactories)-1
+	pivotIndex := rand.Int() % len(baryFactories)
+
+	baryFactories[pivotIndex], baryFactories[right] = baryFactories[right], baryFactories[pivotIndex]
+
+	for i := range baryFactories {
+		if game.factories[i].baryDistance <
+			game.factories[right].baryDistance {
+			baryFactories[i], baryFactories[left] = baryFactories[left], baryFactories[i]
+			left++
+		}
+	}
+
+	baryFactories[left], baryFactories[right] = baryFactories[right], baryFactories[left]
+
+	game.quicksortBary(baryFactories[:left])
+	game.quicksortBary(baryFactories[left+1:])
+
+	return baryFactories
+}
+
+// Compute the different combinaisons of orders to compute from
+func (game *Game) computeFactoryOrder() []int {
+	// orders := make([]int, len(game.factories))
+
+	orderedFactories := make([]int, len(game.factories))
+	for i := range game.factories {
+		orderedFactories[i] = i
+	}
+	orderedFactories = game.quicksortBary(orderedFactories)
+	fmt.Fprintln(os.Stderr, "OrderedFactories:", orderedFactories)
+
+	// for index, mainFactory := range orderedFactories {
+	// 	orders[index] = append(orders[index], mainFactory)
+	// 	for _, myFactory := range game.myFactories {
+	// 		//fmt.Fprintln(os.Stderr, "My Factory:", mainFactory)
+	// 		orders[index] = append(orders[index], myFactory.id)
+	// 	}
+	// 	for _, otherFactory := range orderedFactories {
+	// 		if otherFactory != mainFactory {
+	// 			//fmt.Fprintln(os.Stderr, "Other Factory:", mainFactory)
+	// 			orders[index] = append(orders[index], otherFactory)
+	// 		}
+	// 	}
+	// }
+	return orderedFactories
 }
 
 // Predicts the population of a factory for the next 20 turn
@@ -119,72 +204,44 @@ func (game *Game) findCriticalTurn(seer [20]int, currentID int, criticalTurn *in
 	}
 }
 
-// Implementation of QuickSort in our specific case
-func (game *Game) quicksortFrom(current *Factory, closestMine []*Factory) []*Factory {
-	if len(closestMine) < 2 {
-		return closestMine
-	}
-
-	left, right := 0, len(closestMine)-1
-	pivotIndex := rand.Int() % len(closestMine)
-
-	closestMine[pivotIndex], closestMine[right] = closestMine[right], closestMine[pivotIndex]
-
-	for i := range closestMine {
-		if game.distances[current.id][closestMine[i].id] <
-			game.distances[current.id][closestMine[right].id] {
-			closestMine[i], closestMine[left] = closestMine[left], closestMine[i]
-			left++
-		}
-	}
-
-	closestMine[left], closestMine[right] = closestMine[right], closestMine[left]
-
-	game.quicksortFrom(current, closestMine[:left])
-	game.quicksortFrom(current, closestMine[left+1:])
-
-	return closestMine
-}
-
 // Skeleton of a tree-node construction function used as it is to compute best move for this turn
 func (game *Game) computePotentialTurn() Game {
 	resultingTurn := *game
 
-	orders := game.computeFactoryOrders()
+	order := game.computeFactoryOrder()
 	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
-	for _, order := range orders {
-		for _, factoryID := range order {
-			seer := game.computeSeer(&game.factories[factoryID])
+	// for _, order := range orders {
+	for _, factoryID := range order {
+		seer := game.computeSeer(&game.factories[factoryID])
 
-			// Check if there's a turn for which the factory changes owner considering its population
-			criticalTurn := -1
-			populationNeed := -1
-			game.findCriticalTurn(seer, factoryID, &criticalTurn, &populationNeed)
+		// Check if there's a turn for which the factory changes owner considering its population
+		criticalTurn := -1
+		populationNeed := -1
+		game.findCriticalTurn(seer, factoryID, &criticalTurn, &populationNeed)
 
-			// If there isn't any criticalTurn for this factory, go to next Factory
-			if criticalTurn == -1 {
-				if game.factories[factoryID].owner == game.playerID && game.factories[factoryID].pop > 10 {
-					resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, factoryID, -1, -1})
-				}
-				continue
+		// If there isn't any criticalTurn for this factory, go to next Factory
+		if criticalTurn == -1 {
+			if game.factories[factoryID].owner == game.playerID && game.factories[factoryID].pop > 10 {
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, factoryID, -1, -1})
 			}
+			continue
+		}
 
-			// Else, check if it's possible to act
-
-			// Sort my factories by closest to this one
-			closestMine := make([]*Factory, len(game.myFactories))
-			copy(closestMine, game.myFactories)
-			closestMine = game.quicksortFrom(&game.factories[factoryID], closestMine)
-
-			for _, otherFactory := range closestMine {
-				if factoryID != otherFactory.id && game.distances[factoryID][otherFactory.id] <= criticalTurn && otherFactory.pop > populationNeed+1 {
-					resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, otherFactory.id, factoryID, populationNeed + 1})
-					otherFactory.pop -= populationNeed + 1
-					break
-				}
+		// Else, check if it's possible to act
+		for _, otherFactory := range game.proximities[factoryID] {
+			if game.factories[otherFactory].owner == game.playerID &&
+				factoryID != otherFactory &&
+				game.distances[factoryID][otherFactory] <= criticalTurn &&
+				game.factories[otherFactory].pop > populationNeed+1 {
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, otherFactory, factoryID, populationNeed + 1})
+				game.factories[otherFactory].pop -= populationNeed + 1
+				break
 			}
 		}
 	}
+	// 	// TODO ALLOW TO COMPUTE ALL THE ORDERS
+	// 	break
+	// }
 
 	return resultingTurn
 }
@@ -221,6 +278,7 @@ func main() {
 		actualGame.distances[factory1][factory2] = distance
 		actualGame.distances[factory2][factory1] = distance
 	}
+	actualGame.initializeProximities()
 
 	for {
 		// entityCount: the number of entities (e.g. factories and troops)
@@ -241,10 +299,10 @@ func main() {
 
 			if entityType == "FACTORY" {
 				if arg1 == 1 {
-					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4}
+					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100}
 					actualGame.myFactories = append(actualGame.myFactories, &actualGame.factories[entityID])
 				} else {
-					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4}
+					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100}
 					actualGame.theirFactories = append(actualGame.theirFactories, &actualGame.factories[entityID])
 				}
 			} else if entityType == "TROOP" {
@@ -253,10 +311,15 @@ func main() {
 				actualGame.bombs[arg3] = append(actualGame.bombs[arg3], Bomb{entityID, arg1, arg2, arg3, arg4})
 			}
 		}
+		/*************************End of Initialization*****************************/
 
-		resultingGame := actualGame.computePotentialTurn()
-		bestMove := resultingGame.firstMove
+		bestMove := actualGame.firstMove
 
+		if len(actualGame.myFactories) > 0 {
+			actualGame.computeBaryDistances()
+			resultingGame := actualGame.computePotentialTurn()
+			bestMove = resultingGame.firstMove
+		}
 		// fmt.Fprintln(os.Stderr, "Debug messages...")
 
 		if len(bestMove) != 0 {
