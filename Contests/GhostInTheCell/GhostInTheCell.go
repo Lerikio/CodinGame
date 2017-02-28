@@ -60,11 +60,14 @@ func (game *Game) computeFactoryOrders() [][]int {
 
 	for index, mainFactory := range game.theirFactories {
 		orders[index] = append(orders[index], mainFactory.id)
+		//fmt.Fprintln(os.Stderr, "Main Factory:", mainFactory.id)
 		for _, myFactory := range game.myFactories {
+			//fmt.Fprintln(os.Stderr, "My Factory:", mainFactory.id)
 			orders[index] = append(orders[index], myFactory.id)
 		}
 		for _, otherFactory := range game.theirFactories {
 			if otherFactory.id != mainFactory.id {
+				//fmt.Fprintln(os.Stderr, "Other Factory:", mainFactory.id)
 				orders[index] = append(orders[index], otherFactory.id)
 			}
 		}
@@ -128,10 +131,8 @@ func (game *Game) quicksortFrom(current *Factory, closestMine []*Factory) []*Fac
 	closestMine[pivotIndex], closestMine[right] = closestMine[right], closestMine[pivotIndex]
 
 	for i := range closestMine {
-		//fmt.Fprintln(os.Stderr, "CurrentID:", current.id, "i:", i, "right:", right, "Length:", len(game.distances))
-		distanceI := game.distances[current.id][i]
-		distanceR := game.distances[current.id][right]
-		if distanceI < distanceR {
+		if game.distances[current.id][closestMine[i].id] <
+			game.distances[current.id][closestMine[right].id] {
 			closestMine[i], closestMine[left] = closestMine[left], closestMine[i]
 			left++
 		}
@@ -145,10 +146,12 @@ func (game *Game) quicksortFrom(current *Factory, closestMine []*Factory) []*Fac
 	return closestMine
 }
 
+// Skeleton of a tree-node construction function used as it is to compute best move for this turn
 func (game *Game) computePotentialTurn() Game {
 	resultingTurn := *game
 
 	orders := game.computeFactoryOrders()
+	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
 	for _, order := range orders {
 		for _, factoryID := range order {
 			seer := game.computeSeer(&game.factories[factoryID])
@@ -225,6 +228,8 @@ func main() {
 		fmt.Scan(&entityCount)
 
 		actualGame.factories = make([]Factory, factoryCount)
+		actualGame.myFactories = actualGame.myFactories[:0]
+		actualGame.theirFactories = actualGame.theirFactories[:0]
 		actualGame.troops = make(map[int][]Troop)
 		actualGame.bombs = make(map[int][]Bomb)
 
@@ -235,7 +240,6 @@ func main() {
 			fmt.Scan(&entityID, &entityType, &arg1, &arg2, &arg3, &arg4, &arg5)
 
 			if entityType == "FACTORY" {
-				//fmt.Fprintln(os.Stderr, "Factory number:", entityID)
 				if arg1 == 1 {
 					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4}
 					actualGame.myFactories = append(actualGame.myFactories, &actualGame.factories[entityID])
