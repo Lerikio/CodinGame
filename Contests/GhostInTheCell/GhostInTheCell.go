@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"os"
 )
 
 // Factory represents all the properties of a factory
@@ -71,6 +70,7 @@ func (game *Game) initializeProximities() {
 }
 
 func (game *Game) computeBaryDistances() {
+	// fmt.Fprintln(os.Stderr, "BaryDistances:")
 	for index := range game.factories {
 		baryDistance := 0
 		for _, myFactory := range game.myFactories {
@@ -78,6 +78,7 @@ func (game *Game) computeBaryDistances() {
 		}
 		baryDistance /= len(game.myFactories)
 		game.factories[index].baryDistance = baryDistance
+		// fmt.Fprintln(os.Stderr, index, "->", baryDistance)
 	}
 }
 
@@ -117,11 +118,12 @@ func (game *Game) quicksortBary(baryFactories []int) []int {
 
 	baryFactories[pivotIndex], baryFactories[right] = baryFactories[right], baryFactories[pivotIndex]
 
-	for i := range baryFactories {
-		if game.factories[i].baryDistance <
-			game.factories[right].baryDistance {
-			baryFactories[i], baryFactories[left] = baryFactories[left], baryFactories[i]
+	for index := range baryFactories {
+		if game.factories[baryFactories[index]].baryDistance <
+			game.factories[baryFactories[right]].baryDistance {
+			baryFactories[index], baryFactories[left] = baryFactories[left], baryFactories[index]
 			left++
+
 		}
 	}
 
@@ -137,12 +139,11 @@ func (game *Game) quicksortBary(baryFactories []int) []int {
 func (game *Game) computeFactoryOrder() []int {
 	// orders := make([]int, len(game.factories))
 
-	orderedFactories := make([]int, len(game.factories))
-	for i := range game.factories {
-		orderedFactories[i] = i
+	orderedFactories := make([]int, len(game.theirFactories))
+	for i := range game.theirFactories {
+		orderedFactories[i] = game.theirFactories[i].id
 	}
 	orderedFactories = game.quicksortBary(orderedFactories)
-	fmt.Fprintln(os.Stderr, "OrderedFactories:", orderedFactories)
 
 	// for index, mainFactory := range orderedFactories {
 	// 	orders[index] = append(orders[index], mainFactory)
@@ -208,40 +209,49 @@ func (game *Game) findCriticalTurn(seer [20]int, currentID int, criticalTurn *in
 func (game *Game) computePotentialTurn() Game {
 	resultingTurn := *game
 
-	order := game.computeFactoryOrder()
-	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
-	// for _, order := range orders {
-	for _, factoryID := range order {
-		seer := game.computeSeer(&game.factories[factoryID])
-
-		// Check if there's a turn for which the factory changes owner considering its population
-		criticalTurn := -1
-		populationNeed := -1
-		game.findCriticalTurn(seer, factoryID, &criticalTurn, &populationNeed)
-
-		// If there isn't any criticalTurn for this factory, go to next Factory
-		if criticalTurn == -1 {
-			if game.factories[factoryID].owner == game.playerID && game.factories[factoryID].pop > 10 {
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, factoryID, -1, -1})
-			}
-			continue
-		}
-
-		// Else, check if it's possible to act
-		for _, otherFactory := range game.proximities[factoryID] {
-			if game.factories[otherFactory].owner == game.playerID &&
-				factoryID != otherFactory &&
-				game.distances[factoryID][otherFactory] <= criticalTurn &&
-				game.factories[otherFactory].pop > populationNeed+1 {
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, otherFactory, factoryID, populationNeed + 1})
-				game.factories[otherFactory].pop -= populationNeed + 1
-				break
-			}
+	for _, mine := range game.myFactories {
+		if mine.prod < 2 && mine.pop > 12 {
+			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
 		}
 	}
-	// 	// TODO ALLOW TO COMPUTE ALL THE ORDERS
-	// 	break
-	// }
+
+	order := game.computeFactoryOrder()
+	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
+
+	for _, targetID := range order {
+		totalAttackPotential := 0
+		var attackStrategy [][2]int
+
+		seer := game.computeSeer(&game.factories[targetID])
+
+		for _, mineID := range game.proximities[targetID] {
+			var mine *Factory
+			mine = &game.factories[mineID]
+			if mine.owner == game.playerID {
+				distance := game.distances[targetID][mineID]
+				if mine.pop > 2 {
+					troopSize := mine.pop - 2
+					if seer[distance] < troopSize {
+						if seer[distance] > 0 {
+							troopSize = seer[distance] + 1
+						} else {
+							troopSize = 1
+						}
+					}
+					totalAttackPotential += troopSize
+					attackStrategy = append(attackStrategy, [2]int{mineID, troopSize})
+					mine.pop -= troopSize
+					if seer[distance] < totalAttackPotential {
+						break
+					}
+				}
+			}
+		}
+
+		for _, move := range attackStrategy {
+			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, move[0], targetID, move[1]})
+		}
+	}
 
 	return resultingTurn
 }
