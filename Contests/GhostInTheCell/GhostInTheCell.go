@@ -54,6 +54,7 @@ type Game struct {
 	theirFactories []*Factory      // All other factories. No difference between ennemy and neutral
 	troops         map[int][]Troop // All the troops in the game, referenced by their destination
 	bombs          map[int][]Bomb  // All the bombs in the game, referenced by their destination
+	seers          [][20]int       // Compute all the populations of the game for the 20 next turns
 }
 
 // Compute the proximity matrix
@@ -66,6 +67,14 @@ func (game *Game) initializeProximities() {
 		}
 		closestToID = game.quicksortFrom(id, closestToID)
 		game.proximities[id] = closestToID[1:]
+	}
+}
+
+func (game *Game) computeSeers() {
+	game.seers = make([][20]int, len(game.factories))
+
+	for i := range game.seers {
+		game.seers[i] = game.computeSeer(&game.factories[i])
 	}
 }
 
@@ -144,20 +153,6 @@ func (game *Game) computeFactoryOrder() []int {
 		orderedFactories[i] = game.theirFactories[i].id
 	}
 	orderedFactories = game.quicksortBary(orderedFactories)
-
-	// for index, mainFactory := range orderedFactories {
-	// 	orders[index] = append(orders[index], mainFactory)
-	// 	for _, myFactory := range game.myFactories {
-	// 		//fmt.Fprintln(os.Stderr, "My Factory:", mainFactory)
-	// 		orders[index] = append(orders[index], myFactory.id)
-	// 	}
-	// 	for _, otherFactory := range orderedFactories {
-	// 		if otherFactory != mainFactory {
-	// 			//fmt.Fprintln(os.Stderr, "Other Factory:", mainFactory)
-	// 			orders[index] = append(orders[index], otherFactory)
-	// 		}
-	// 	}
-	// }
 	return orderedFactories
 }
 
@@ -165,10 +160,20 @@ func (game *Game) computeFactoryOrder() []int {
 func (game *Game) computeSeer(this *Factory) [20]int {
 	var seer [20]int
 	for i := range seer {
-		seer[i] = this.pop + (i+1)*this.prod
+		if this.owner == -game.playerID {
+			seer[i] = -(this.pop + (i+1)*this.prod)
+		} else if this.owner == 0 {
+			seer[i] = -this.pop
+		} else {
+			seer[i] = this.pop + (i+1)*this.prod
+		}
 		for _, troop := range game.troops[this.id] {
-			if troop.eta == i-1 {
-				seer[i] += troop.owner * troop.pop
+			if troop.eta <= i+1 {
+				if troop.owner != game.playerID {
+					seer[i] -= troop.pop
+				} else {
+					seer[i] += troop.pop
+				}
 			}
 		}
 		for _, bomb := range game.bombs[this.id] {
@@ -188,68 +193,180 @@ func (game *Game) computeSeer(this *Factory) [20]int {
 	return seer
 }
 
-func (game *Game) findCriticalTurn(seer [20]int, currentID int, criticalTurn *int, populationNeed *int) {
-	for turn, population := range seer {
-		if game.factories[currentID].owner == game.playerID && population < 0 {
-			*criticalTurn = turn
-			*populationNeed = -population
-			break
-		} else {
-			if population < 0 {
-				*criticalTurn = -1
-			} else {
-				*criticalTurn = turn
-				*populationNeed = population
+/*
+													FULL METAL TURN
+    Just send everything to the closest factory. All the time. Waaargh.
+*/
+func (game *Game) computeFullMetalTurn() Game {
+	resultingTurn := *game
+
+	// Try to increase production of current factories
+	for _, mine := range game.myFactories {
+		if mine.prod < 3 && mine.pop > 11 {
+			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
+			game.factories[mine.id].pop -= 10
+		}
+	}
+	order := game.computeFactoryOrder()
+	for _, targetID := range order {
+		if game.factories[targetID].prod < 1 {
+			continue
+		}
+
+		if game.seers[targetID][19] > 0 {
+			continue
+		}
+
+		totalAttack := 0
+		for _, mine := range game.myFactories {
+			if mine.pop > 1 {
+				attackPower := mine.pop - 1
+				totalAttack += attackPower
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, targetID, attackPower})
+				if totalAttack > game.seers[targetID][19] {
+					continue
+				}
 			}
 		}
 	}
+	return resultingTurn
 }
 
-// Skeleton of a tree-node construction function used as it is to compute best move for this turn
-func (game *Game) computePotentialTurn() Game {
+/*
+													AGRESSIVE TURN
+    A strategy based on always attacking the closest factory that still needs
+		more forces to take it.
+*/
+func (game *Game) computeAgressiveTurn() Game {
 	resultingTurn := *game
 
+	// Try to increase production of current factories
 	for _, mine := range game.myFactories {
-		if mine.prod < 2 && mine.pop > 12 {
+		if mine.prod < 3 && mine.pop > 11 {
 			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
+			game.factories[mine.id].pop -= 10
 		}
 	}
 
 	order := game.computeFactoryOrder()
 	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
 
+	// Attack closes factory that has a non-zero production
 	for _, targetID := range order {
+		if game.factories[targetID].prod < 1 {
+			continue
+		}
 		totalAttackPotential := 0
 		var attackStrategy [][2]int
 
-		seer := game.computeSeer(&game.factories[targetID])
+		criticalTurn, populationNeeded := -1, -1
+		for index, seer := range game.seers[targetID] {
+			if populationNeeded < -seer {
+				criticalTurn, populationNeeded = index, -seer
+			}
+		}
+		if criticalTurn == -1 {
+			continue
+		}
 
 		for _, mineID := range game.proximities[targetID] {
 			var mine *Factory
 			mine = &game.factories[mineID]
 			if mine.owner == game.playerID {
-				distance := game.distances[targetID][mineID]
-				if mine.pop > 2 {
-					troopSize := mine.pop - 2
-					if seer[distance] < troopSize {
-						if seer[distance] > 0 {
-							troopSize = seer[distance] + 1
-						} else {
-							troopSize = 1
-						}
-					}
-					totalAttackPotential += troopSize
+				troopSize := mine.pop
+				if populationNeeded > 0 && populationNeeded < troopSize {
+					troopSize = populationNeeded + 1
+				}
+				totalAttackPotential += troopSize
+				if troopSize > 0 {
 					attackStrategy = append(attackStrategy, [2]int{mineID, troopSize})
 					mine.pop -= troopSize
-					if seer[distance] < totalAttackPotential {
-						break
-					}
+				}
+				if populationNeeded < totalAttackPotential {
+					break
 				}
 			}
 		}
 
+		// if populationNeeded > totalAttackPotential {
+		// 	for _, move := range attackStrategy {
+		// 		game.factories[move[0]].pop += move[1]
+		// 	}
+		// } else {
 		for _, move := range attackStrategy {
+			// fmt.Fprintln(os.Stderr, "For factory N°", targetID, ", move is as follow:", attackStrategy)
 			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, move[0], targetID, move[1]})
+			// fmt.Fprintln(os.Stderr, resultingTurn.firstMove)
+		}
+		// }
+	}
+	return resultingTurn
+}
+
+/*
+													NETWORK TURN
+    A strategy based more on a network system, where cyborgs are always
+		pushed toward the frontiers of my 'empire', to give more assault
+		powers and reinforce the borders.
+*/
+func (game *Game) computeNetworkTurn() Game {
+	resultingTurn := *game
+
+	// Try to increase production of current factories
+	for _, mine := range game.myFactories {
+		if mine.prod < 3 && mine.pop > 11 {
+			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
+			game.factories[mine.id].pop -= 10
+		}
+	}
+
+	for _, mine := range game.myFactories {
+		if mine.pop == 0 {
+			continue
+		}
+		// Check if one of the 3 closest is an ennemy
+		closestEnnemy := -1
+		var outwardFriends []int
+		for _, currentClosest := range game.proximities[mine.id] {
+			if game.factories[currentClosest].owner != game.playerID &&
+				game.factories[currentClosest].prod > 0 {
+				willBecomeMine := false
+				for _, seer := range game.seers[currentClosest] {
+					if seer > 0 {
+						willBecomeMine = true
+						break
+					}
+				}
+				if !willBecomeMine {
+					closestEnnemy = currentClosest
+					break
+				}
+			} else if mine.baryDistance < game.factories[currentClosest].baryDistance {
+				outwardFriends = append(outwardFriends, currentClosest)
+				if len(outwardFriends) >= 3 {
+					break
+				}
+			}
+		}
+
+		if closestEnnemy != -1 {
+			necessaryForce := -game.seers[closestEnnemy][game.distances[mine.id][closestEnnemy]] + 1
+			if necessaryForce > 0 {
+				if mine.pop > necessaryForce {
+					if mine.pop > necessaryForce+10 {
+						resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce + 10})
+					} else {
+						resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce})
+					}
+				} else {
+					resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, mine.pop})
+					// mine.pop = 0
+				}
+			}
+		} else {
+			for _, currentOutward := range outwardFriends {
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, currentOutward, mine.pop / 3})
+			}
 		}
 	}
 
@@ -327,7 +444,8 @@ func main() {
 
 		if len(actualGame.myFactories) > 0 {
 			actualGame.computeBaryDistances()
-			resultingGame := actualGame.computePotentialTurn()
+			actualGame.computeSeers()
+			resultingGame := actualGame.computeFullMetalTurn()
 			bestMove = resultingGame.firstMove
 		}
 		// fmt.Fprintln(os.Stderr, "Debug messages...")
