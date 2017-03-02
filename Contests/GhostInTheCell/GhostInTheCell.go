@@ -202,6 +202,9 @@ func (game *Game) computeSeer(this *Factory) [20]int {
 	return seer
 }
 
+/*
+	BOMB STRATEGY
+*/
 func (game *Game) computeBomb() {
 	order := game.computeFactoryOrder()
 	if game.bombMe > 0 {
@@ -242,48 +245,60 @@ func (game *Game) computeNetworkTurn() Game {
 
 	// Try to increase production of current factories
 	for _, mine := range game.myFactories {
-		if mine.prod < 3 && mine.pop > 30 {
+		if mine.prod < 3 && mine.pop > 20 {
 			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
 			game.factories[mine.id].pop -= 10
 		}
 	}
 
+	// Then we establish a strategy for each factory
 	for _, mine := range game.myFactories {
+		// If the factory has 0 pop, be can't do anything
 		if mine.pop == 0 {
 			continue
 		}
-		// Check if one of the 3 closest is an ennemy
+
+		// We establish which ennemy is closest
 		closestEnnemy := -1
-		closestEnnemyPosition := len(game.proximities[mine.id])
 		var outwardFriends []int
-
-		for position, currentClosest := range game.proximities[mine.id] {
-
-			if game.factories[currentClosest].owner != game.playerID && game.factories[currentClosest].prod > 0 {
+		for _, currentClosest := range game.proximities[mine.id] {
+			if game.factories[currentClosest].owner != game.playerID &&
+				game.factories[currentClosest].prod > 0 {
 				closestEnnemy = currentClosest
-				closestEnnemyPosition = position
 				break
 			}
 		}
+		// We try another strategy to find a target
+		if closestEnnemy == -1 && len(game.theirFactories) != 0 {
+			closestEnnemy = game.theirFactories[0].id
+		}
 
-		for position, currentClosest := range game.proximities[mine.id] {
-			if position == closestEnnemyPosition {
-				break
-			} else {
-				//fmt.Fprintln(os.Stderr, mine.id, closestEnnemy, currentClosest, closestEnnemy)
-				if closestEnnemy == -1 {
-					if position < 3 {
+		if closestEnnemy == -1 {
+			// If no ennemy is found, we find a cool ally to send troop to
+			bestAlly := mine.id
+			for _, allies := range game.myFactories {
+				if allies.baryToThem < game.factories[bestAlly].baryToThem {
+					bestAlly = allies.id
+				}
+			}
+			if bestAlly != mine.id {
+				outwardFriends = append(outwardFriends, bestAlly)
+			}
+		} else {
+			// If we have a target, we try to see if we can push forces to closer allies than attacking directly
+			for _, currentClosest := range game.proximities[mine.id] {
+				if closestEnnemy == currentClosest {
+					break
+				} else {
+					if mine.id != currentClosest &&
+						game.distances[mine.id][closestEnnemy] > game.distances[currentClosest][closestEnnemy] {
 						outwardFriends = append(outwardFriends, currentClosest)
-					} else {
-						break
 					}
-				} else if game.distances[mine.id][closestEnnemy] > game.distances[currentClosest][closestEnnemy] {
-					outwardFriends = append(outwardFriends, currentClosest)
 				}
 			}
 		}
 
-		if len(outwardFriends) == 0 {
+		if len(outwardFriends) == 0 && closestEnnemy != -1 {
 			necessaryForce := -game.seers[closestEnnemy][game.distances[mine.id][closestEnnemy]] + 1
 			if necessaryForce > 0 {
 				if mine.pop > necessaryForce+10 {
