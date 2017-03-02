@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"time"
 )
 
 // Factory represents all the properties of a factory
@@ -12,7 +13,8 @@ type Factory struct {
 	pop              int
 	prod             int
 	turnsWithoutProd int
-	baryDistance     int
+	baryToMe         int
+	baryToThem       int
 }
 
 // Troop represents all the properties of a single troop
@@ -55,6 +57,7 @@ type Game struct {
 	troops         map[int][]Troop // All the troops in the game, referenced by their destination
 	bombs          map[int][]Bomb  // All the bombs in the game, referenced by their destination
 	seers          [][20]int       // Compute all the populations of the game for the 20 next turns
+	highestPop     int             // Just the highest population in the game
 }
 
 // Compute the proximity matrix
@@ -81,13 +84,19 @@ func (game *Game) computeSeers() {
 func (game *Game) computeBaryDistances() {
 	// fmt.Fprintln(os.Stderr, "BaryDistances:")
 	for index := range game.factories {
-		baryDistance := 0
+		baryToMe := 0
+		baryToThem := 0
 		for _, myFactory := range game.myFactories {
-			baryDistance += game.distances[index][myFactory.id]
+			baryToMe += game.distances[index][myFactory.id]
 		}
-		baryDistance /= len(game.myFactories)
-		game.factories[index].baryDistance = baryDistance
-		// fmt.Fprintln(os.Stderr, index, "->", baryDistance)
+		for _, theirFactory := range game.theirFactories {
+			baryToThem += game.distances[index][theirFactory.id]
+		}
+		baryToMe /= len(game.myFactories)
+		baryToThem /= len(game.theirFactories)
+		game.factories[index].baryToMe = baryToMe
+		game.factories[index].baryToThem = baryToThem
+		// fmt.Fprintln(os.Stderr, index, "->", baryToMe)
 	}
 }
 
@@ -128,8 +137,8 @@ func (game *Game) quicksortBary(baryFactories []int) []int {
 	baryFactories[pivotIndex], baryFactories[right] = baryFactories[right], baryFactories[pivotIndex]
 
 	for index := range baryFactories {
-		if game.factories[baryFactories[index]].baryDistance <
-			game.factories[baryFactories[right]].baryDistance {
+		if game.factories[baryFactories[index]].baryToMe <
+			game.factories[baryFactories[right]].baryToMe {
 			baryFactories[index], baryFactories[left] = baryFactories[left], baryFactories[index]
 			left++
 
@@ -314,7 +323,7 @@ func (game *Game) computeNetworkTurn() Game {
 
 	// Try to increase production of current factories
 	for _, mine := range game.myFactories {
-		if mine.prod < 3 && mine.pop > 11 {
+		if mine.prod < 3 && mine.pop > 30 {
 			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
 			game.factories[mine.id].pop -= 10
 		}
@@ -328,8 +337,12 @@ func (game *Game) computeNetworkTurn() Game {
 		closestEnnemy := -1
 		var outwardFriends []int
 		for _, currentClosest := range game.proximities[mine.id] {
-			if game.factories[currentClosest].owner != game.playerID &&
-				game.factories[currentClosest].prod > 0 {
+			wouldAttackZeroProd := false
+			if rand.Float64() < 0.1 {
+				wouldAttackZeroProd = true
+			}
+			wouldAttackZeroProd = wouldAttackZeroProd || game.factories[currentClosest].prod > 0
+			if game.factories[currentClosest].owner != game.playerID && wouldAttackZeroProd {
 				willBecomeMine := false
 				for _, seer := range game.seers[currentClosest] {
 					if seer > 0 {
@@ -341,10 +354,9 @@ func (game *Game) computeNetworkTurn() Game {
 					closestEnnemy = currentClosest
 					break
 				}
-			} else if mine.baryDistance < game.factories[currentClosest].baryDistance {
-				outwardFriends = append(outwardFriends, currentClosest)
-				if len(outwardFriends) >= 3 {
-					break
+			} else if mine.baryToThem < game.factories[currentClosest].baryToThem {
+				if len(outwardFriends) < 3 {
+					outwardFriends = append(outwardFriends, currentClosest)
 				}
 			}
 		}
@@ -352,20 +364,18 @@ func (game *Game) computeNetworkTurn() Game {
 		if closestEnnemy != -1 {
 			necessaryForce := -game.seers[closestEnnemy][game.distances[mine.id][closestEnnemy]] + 1
 			if necessaryForce > 0 {
-				if mine.pop > necessaryForce {
-					if mine.pop > necessaryForce+10 {
-						resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce + 10})
-					} else {
-						resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce})
-					}
+				if mine.pop > necessaryForce+10 {
+					necessaryForce += 10
 				} else {
-					resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, mine.pop})
-					// mine.pop = 0
+					necessaryForce = mine.pop
 				}
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce})
+				game.troops[closestEnnemy] = append(game.troops[closestEnnemy], Troop{-1, game.playerID, mine.id, closestEnnemy, necessaryForce, game.distances[mine.id][closestEnnemy]})
 			}
 		} else {
 			for _, currentOutward := range outwardFriends {
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, currentOutward, mine.pop / 3})
+				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, currentOutward, mine.pop / len(outwardFriends)})
+				game.troops[currentOutward] = append(game.troops[currentOutward], Troop{-1, game.playerID, mine.id, currentOutward, mine.pop / len(outwardFriends), game.distances[mine.id][currentOutward]})
 			}
 		}
 	}
@@ -377,6 +387,8 @@ func (game *Game) computeNetworkTurn() Game {
                         MAIN
 ****************************************************/
 func main() {
+
+	rand.Seed(time.Now().UnixNano())
 	// factoryCount: the number of factories
 	var factoryCount int
 	fmt.Scan(&factoryCount)
@@ -426,11 +438,14 @@ func main() {
 
 			if entityType == "FACTORY" {
 				if arg1 == 1 {
-					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100}
+					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100, 100}
 					actualGame.myFactories = append(actualGame.myFactories, &actualGame.factories[entityID])
 				} else {
-					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100}
+					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100, 100}
 					actualGame.theirFactories = append(actualGame.theirFactories, &actualGame.factories[entityID])
+				}
+				if arg2 > actualGame.highestPop {
+					actualGame.highestPop = arg2
 				}
 			} else if entityType == "TROOP" {
 				actualGame.troops[arg3] = append(actualGame.troops[arg3], Troop{entityID, arg1, arg2, arg3, arg4, arg5})
@@ -445,7 +460,7 @@ func main() {
 		if len(actualGame.myFactories) > 0 {
 			actualGame.computeBaryDistances()
 			actualGame.computeSeers()
-			resultingGame := actualGame.computeFullMetalTurn()
+			resultingGame := actualGame.computeNetworkTurn()
 			bestMove = resultingGame.firstMove
 		}
 		// fmt.Fprintln(os.Stderr, "Debug messages...")
