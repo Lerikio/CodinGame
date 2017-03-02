@@ -202,114 +202,32 @@ func (game *Game) computeSeer(this *Factory) [20]int {
 	return seer
 }
 
-/*
-													FULL METAL TURN
-    Just send everything to the closest factory. All the time. Waaargh.
-*/
-func (game *Game) computeFullMetalTurn() Game {
-	resultingTurn := *game
-
-	// Try to increase production of current factories
-	for _, mine := range game.myFactories {
-		if mine.prod < 3 && mine.pop > 11 {
-			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
-			game.factories[mine.id].pop -= 10
-		}
-	}
+func (game *Game) computeBomb() {
 	order := game.computeFactoryOrder()
-	for _, targetID := range order {
-		if game.factories[targetID].prod < 1 {
-			continue
-		}
-
-		if game.seers[targetID][19] > 0 {
-			continue
-		}
-
-		totalAttack := 0
-		for _, mine := range game.myFactories {
-			if mine.pop > 1 {
-				attackPower := mine.pop - 1
-				totalAttack += attackPower
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, targetID, attackPower})
-				if totalAttack > game.seers[targetID][19] {
-					continue
+	if game.bombMe > 0 {
+		for i := len(order) - 1; i >= 0; i-- {
+			ID := order[i]
+			if game.factories[ID].owner == -game.playerID &&
+				len(game.bombs[ID]) == 0 &&
+				game.factories[ID].turnsWithoutProd == 0 &&
+				game.factories[ID].prod == 3 &&
+				game.seers[ID][19] < 0 {
+				source := -1
+				for _, current := range game.proximities[ID] {
+					if game.factories[current].owner == game.playerID {
+						source = current
+						break
+					}
 				}
-			}
-		}
-	}
-	return resultingTurn
-}
-
-/*
-													AGRESSIVE TURN
-    A strategy based on always attacking the closest factory that still needs
-		more forces to take it.
-*/
-func (game *Game) computeAgressiveTurn() Game {
-	resultingTurn := *game
-
-	// Try to increase production of current factories
-	for _, mine := range game.myFactories {
-		if mine.prod < 3 && mine.pop > 11 {
-			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{2, mine.id, -1, -1})
-			game.factories[mine.id].pop -= 10
-		}
-	}
-
-	order := game.computeFactoryOrder()
-	//fmt.Fprintln(os.Stderr, "Factory orders:", orders)
-
-	// Attack closes factory that has a non-zero production
-	for _, targetID := range order {
-		if game.factories[targetID].prod < 1 {
-			continue
-		}
-		totalAttackPotential := 0
-		var attackStrategy [][2]int
-
-		criticalTurn, populationNeeded := -1, -1
-		for index, seer := range game.seers[targetID] {
-			if populationNeeded < -seer {
-				criticalTurn, populationNeeded = index, -seer
-			}
-		}
-		if criticalTurn == -1 {
-			continue
-		}
-
-		for _, mineID := range game.proximities[targetID] {
-			var mine *Factory
-			mine = &game.factories[mineID]
-			if mine.owner == game.playerID {
-				troopSize := mine.pop
-				if populationNeeded > 0 && populationNeeded < troopSize {
-					troopSize = populationNeeded + 1
-				}
-				totalAttackPotential += troopSize
-				if troopSize > 0 {
-					attackStrategy = append(attackStrategy, [2]int{mineID, troopSize})
-					mine.pop -= troopSize
-				}
-				if populationNeeded < totalAttackPotential {
+				if source >= 0 && game.factories[source].owner == game.playerID {
+					game.bombMe--
+					game.firstMove = append(game.firstMove, [4]int{1, source, ID, -1})
+					game.bombs[ID] = append(game.bombs[ID], Bomb{-1, game.playerID, source, ID, game.distances[source][ID]})
 					break
 				}
 			}
 		}
-
-		// if populationNeeded > totalAttackPotential {
-		// 	for _, move := range attackStrategy {
-		// 		game.factories[move[0]].pop += move[1]
-		// 	}
-		// } else {
-		for _, move := range attackStrategy {
-			// fmt.Fprintln(os.Stderr, "For factory N°", targetID, ", move is as follow:", attackStrategy)
-			resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, move[0], targetID, move[1]})
-			// fmt.Fprintln(os.Stderr, resultingTurn.firstMove)
-		}
-		// }
 	}
-	return resultingTurn
 }
 
 /*
@@ -320,6 +238,7 @@ func (game *Game) computeAgressiveTurn() Game {
 */
 func (game *Game) computeNetworkTurn() Game {
 	resultingTurn := *game
+	var moves [][4]int
 
 	// Try to increase production of current factories
 	for _, mine := range game.myFactories {
@@ -335,49 +254,62 @@ func (game *Game) computeNetworkTurn() Game {
 		}
 		// Check if one of the 3 closest is an ennemy
 		closestEnnemy := -1
+		closestEnnemyPosition := len(game.proximities[mine.id])
 		var outwardFriends []int
-		for _, currentClosest := range game.proximities[mine.id] {
-			wouldAttackZeroProd := false
-			if rand.Float64() < 0.1 {
-				wouldAttackZeroProd = true
+
+		for position, currentClosest := range game.proximities[mine.id] {
+
+			if game.factories[currentClosest].owner != game.playerID && game.factories[currentClosest].prod > 0 {
+				closestEnnemy = currentClosest
+				closestEnnemyPosition = position
+				break
 			}
-			wouldAttackZeroProd = wouldAttackZeroProd || game.factories[currentClosest].prod > 0
-			if game.factories[currentClosest].owner != game.playerID && wouldAttackZeroProd {
-				willBecomeMine := false
-				for _, seer := range game.seers[currentClosest] {
-					if seer > 0 {
-						willBecomeMine = true
+		}
+
+		for position, currentClosest := range game.proximities[mine.id] {
+			if position == closestEnnemyPosition {
+				break
+			} else {
+				//fmt.Fprintln(os.Stderr, mine.id, closestEnnemy, currentClosest, closestEnnemy)
+				if closestEnnemy == -1 {
+					if position < 3 {
+						outwardFriends = append(outwardFriends, currentClosest)
+					} else {
 						break
 					}
-				}
-				if !willBecomeMine {
-					closestEnnemy = currentClosest
-					break
-				}
-			} else if mine.baryToThem < game.factories[currentClosest].baryToThem {
-				if len(outwardFriends) < 3 {
+				} else if game.distances[mine.id][closestEnnemy] > game.distances[currentClosest][closestEnnemy] {
 					outwardFriends = append(outwardFriends, currentClosest)
 				}
 			}
 		}
 
-		if closestEnnemy != -1 {
+		if len(outwardFriends) == 0 {
 			necessaryForce := -game.seers[closestEnnemy][game.distances[mine.id][closestEnnemy]] + 1
 			if necessaryForce > 0 {
 				if mine.pop > necessaryForce+10 {
 					necessaryForce += 10
-				} else {
+				} else if necessaryForce > mine.pop {
 					necessaryForce = mine.pop
 				}
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, closestEnnemy, necessaryForce})
+				moves = append(moves, [4]int{0, mine.id, closestEnnemy, necessaryForce})
 				game.troops[closestEnnemy] = append(game.troops[closestEnnemy], Troop{-1, game.playerID, mine.id, closestEnnemy, necessaryForce, game.distances[mine.id][closestEnnemy]})
+				mine.pop -= necessaryForce
 			}
 		} else {
-			for _, currentOutward := range outwardFriends {
-				resultingTurn.firstMove = append(resultingTurn.firstMove, [4]int{0, mine.id, currentOutward, mine.pop / len(outwardFriends)})
-				game.troops[currentOutward] = append(game.troops[currentOutward], Troop{-1, game.playerID, mine.id, currentOutward, mine.pop / len(outwardFriends), game.distances[mine.id][currentOutward]})
+			if mine.pop > len(outwardFriends) {
+				for _, currentOutward := range outwardFriends {
+					transfer := mine.pop / len(outwardFriends)
+					moves = append(moves, [4]int{0, mine.id, currentOutward, transfer})
+					game.troops[currentOutward] = append(game.troops[currentOutward], Troop{-1, game.playerID, mine.id, currentOutward, transfer, game.distances[mine.id][currentOutward]})
+					mine.pop -= transfer
+				}
 			}
 		}
+	}
+
+	if len(moves) != 0 {
+		resultingTurn.firstMove = append(resultingTurn.firstMove, moves...)
+		resultingTurn = resultingTurn.computeNetworkTurn()
 	}
 
 	return resultingTurn
@@ -460,6 +392,8 @@ func main() {
 		if len(actualGame.myFactories) > 0 {
 			actualGame.computeBaryDistances()
 			actualGame.computeSeers()
+			actualGame.firstMove = [][4]int{}
+			actualGame.computeBomb()
 			resultingGame := actualGame.computeNetworkTurn()
 			bestMove = resultingGame.firstMove
 		}
@@ -477,13 +411,6 @@ func main() {
 				}
 				if i != len(bestMove)-1 {
 					action = fmt.Sprint(action, " ; ")
-				}
-			}
-			if actualGame.currentTurn == 0 {
-				for _, factory := range actualGame.theirFactories {
-					if factory.owner == -1 {
-						action = fmt.Sprint(action, "; BOMB ", actualGame.myFactories[0].id, factory.id)
-					}
 				}
 			}
 			fmt.Println(action)
