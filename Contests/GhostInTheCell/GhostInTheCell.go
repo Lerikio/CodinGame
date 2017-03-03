@@ -93,7 +93,11 @@ func (game *Game) computeBaryDistances() {
 			baryToThem += game.distances[index][theirFactory.id]
 		}
 		baryToMe /= len(game.myFactories)
-		baryToThem /= len(game.theirFactories)
+		if len(game.theirFactories) == 0 {
+			baryToThem = 0
+		} else {
+			baryToThem /= len(game.theirFactories)
+		}
 		game.factories[index].baryToMe = baryToMe
 		game.factories[index].baryToThem = baryToThem
 		// fmt.Fprintln(os.Stderr, index, "->", baryToMe)
@@ -367,6 +371,9 @@ func main() {
 	actualGame.initializeProximities()
 
 	for {
+
+		// start := time.Now()
+
 		// entityCount: the number of entities (e.g. factories and troops)
 		var entityCount int
 		fmt.Scan(&entityCount)
@@ -433,6 +440,8 @@ func main() {
 			// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
 			fmt.Println("WAIT")
 		}
+		// elapsed := time.Since(start)
+		// fmt.Fprintln(os.Stderr, "Time:", elapsed)
 		actualGame.currentTurn++
 	}
 }
