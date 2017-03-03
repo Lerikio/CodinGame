@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"time"
 )
 
@@ -57,7 +56,7 @@ type Game struct {
 	theirFactories []*Factory      // All other factories. No difference between ennemy and neutral
 	troops         map[int][]Troop // All the troops in the game, referenced by their destination
 	bombs          map[int][]Bomb  // All the bombs in the game, referenced by their destination
-	seers          []int           // Compute all the populations of the game for the 20 next turns
+	seers          [][20]int       // Compute all the populations of the game for the 20 next turns
 	highestPop     int             // Just the highest population in the game
 }
 
@@ -65,23 +64,17 @@ type Game struct {
 func (game *Game) initializeProximities() {
 	game.proximities = make([][]int, len(game.distances[0]))
 	for id := range game.distances[0] {
-		closestToID := make([]int, len(game.distances[0]))
-		count := 0
+		closestToID := make([]int, len(game.distances[0])-1)
 		for index := range closestToID {
-			if id != index {
-				closestToID[count] = index
-				count++
-			}
+			closestToID[index] = index
 		}
-		fmt.Fprintln(os.Stderr, id, "->", closestToID)
 		closestToID = game.quicksortFrom(id, closestToID)
-		fmt.Fprintln(os.Stderr, id, "->", closestToID)
 		game.proximities[id] = closestToID[1:]
 	}
 }
 
 func (game *Game) computeSeers() {
-	game.seers = make([]int, len(game.factories))
+	game.seers = make([][20]int, len(game.factories))
 
 	for i := range game.seers {
 		game.seers[i] = game.computeSeer(&game.factories[i])
@@ -100,11 +93,7 @@ func (game *Game) computeBaryDistances() {
 			baryToThem += game.distances[index][theirFactory.id]
 		}
 		baryToMe /= len(game.myFactories)
-		if len(game.theirFactories) == 0 {
-			baryToThem = 0
-		} else {
-			baryToThem /= len(game.theirFactories)
-		}
+		baryToThem /= len(game.theirFactories)
 		game.factories[index].baryToMe = baryToMe
 		game.factories[index].baryToThem = baryToThem
 		// fmt.Fprintln(os.Stderr, index, "->", baryToMe)
@@ -177,34 +166,37 @@ func (game *Game) computeFactoryOrder() []int {
 }
 
 // Predicts the population of a factory for the next 20 turn
-func (game *Game) computeSeer(this *Factory) int {
-	var seer int
-	// for i := range seer {
-	if this.owner == -game.playerID {
-		seer = -(this.pop + (20)*this.prod)
-	} else if this.owner == 0 {
-		seer = -this.pop
-	} else {
-		seer = this.pop + (20)*this.prod
-	}
-	for _, troop := range game.troops[this.id] {
-		if troop.owner != game.playerID {
-			seer -= troop.pop
+func (game *Game) computeSeer(this *Factory) [20]int {
+	var seer [20]int
+	for i := range seer {
+		if this.owner == -game.playerID {
+			seer[i] = -(this.pop + (i+1)*this.prod)
+		} else if this.owner == 0 {
+			seer[i] = -this.pop
 		} else {
-			seer += troop.pop
+			seer[i] = this.pop + (i+1)*this.prod
 		}
-	}
-	for i := 0; i < len(game.bombs[this.id]); i++ {
-		if seer/2 < 10 || seer/2 > -10 {
-			if seer < 10 || seer > -10 {
-				seer = 0
-			} else if this.owner == game.playerID {
-				seer -= 10
-			} else {
-				seer += 10
+		for _, troop := range game.troops[this.id] {
+			if troop.eta <= i+1 {
+				if troop.owner != game.playerID {
+					seer[i] -= troop.pop
+				} else {
+					seer[i] += troop.pop
+				}
 			}
-		} else {
-			seer /= 2
+		}
+		for _, bomb := range game.bombs[this.id] {
+			if bomb.eta == i-1 {
+				if seer[i]/2 < 10 {
+					if seer[i] < 10 {
+						seer[i] = 0
+					} else {
+						seer[i] -= 10
+					}
+				} else {
+					seer[i] /= 2
+				}
+			}
 		}
 	}
 	return seer
@@ -222,7 +214,7 @@ func (game *Game) computeBomb() {
 				len(game.bombs[ID]) == 0 &&
 				game.factories[ID].turnsWithoutProd == 0 &&
 				game.factories[ID].prod == 3 &&
-				game.seers[ID] < 0 {
+				game.seers[ID][19] < 0 {
 				source := -1
 				for _, current := range game.proximities[ID] {
 					if game.factories[current].owner == game.playerID {
@@ -267,74 +259,52 @@ func (game *Game) computeNetworkTurn() Game {
 		}
 
 		// We establish which ennemy is closest
-		var closestEnnemy []int
+		closestEnnemy := -1
 		var outwardFriends []int
 		for _, currentClosest := range game.proximities[mine.id] {
-			if game.factories[currentClosest].prod > 0 &&
-				game.factories[currentClosest].owner != game.playerID {
-				closestEnnemy = append(closestEnnemy, currentClosest)
-				fmt.Fprintln(os.Stderr, closestEnnemy)
-				if len(closestEnnemy) > 0 {
-					break
-				}
+			if game.factories[currentClosest].owner != game.playerID &&
+				game.factories[currentClosest].prod > 0 {
+				closestEnnemy = currentClosest
+				break
 			}
 		}
-		// We try another strategy to find a target
-		if len(closestEnnemy) == 0 && len(game.theirFactories) != 0 {
-			closestEnnemy = append(closestEnnemy, game.theirFactories[0].id)
-		}
 
-		if len(closestEnnemy) == 0 {
+		if closestEnnemy == -1 {
 			// If no ennemy is found, we find a cool ally to send troop to
-			// bestAlly := mine.id
-			// for _, allies := range game.myFactories {
-			// 	if allies.baryToThem < game.factories[bestAlly].baryToThem {
-			// 		bestAlly = allies.id
-			// 	}
-			// }
-			// if bestAlly != mine.id {
-			// 	outwardFriends = append(outwardFriends, bestAlly)
-			// }
-			continue
+			bestAlly := mine.id
+			for _, allies := range game.myFactories {
+				if allies.baryToThem < game.factories[bestAlly].baryToThem {
+					bestAlly = allies.id
+				}
+			}
+			if bestAlly != mine.id {
+				outwardFriends = append(outwardFriends, bestAlly)
+			}
 		} else {
 			// If we have a target, we try to see if we can push forces to closer allies than attacking directly
-			// for _, currentClosest := range game.proximities[mine.id] {
-			// 	if closestEnnemy == currentClosest {
-			// 		break
-			// 	} else {
-			// 		if mine.id != currentClosest &&
-			// 			game.distances[mine.id][closestEnnemy] > game.distances[currentClosest][closestEnnemy] {
-			// 			outwardFriends = append(outwardFriends, currentClosest)
-			// 		}
-			// 	}
-			// }
-			for _, currentEnnemy := range closestEnnemy {
-				for _, currentClosest := range game.proximities[currentEnnemy] {
-					if currentClosest == mine.id {
-						break
-					} else if game.factories[currentClosest].owner == game.playerID {
+			for _, currentClosest := range game.proximities[mine.id] {
+				if closestEnnemy == currentClosest {
+					break
+				} else {
+					if mine.id != currentClosest &&
+						game.distances[mine.id][closestEnnemy] > game.distances[currentClosest][closestEnnemy] {
 						outwardFriends = append(outwardFriends, currentClosest)
-						if len(outwardFriends) > 2 {
-							break
-						}
 					}
 				}
 			}
 		}
 
-		if len(outwardFriends) == 0 && len(closestEnnemy) > 0 {
-			for _, currentEnnemy := range closestEnnemy {
-				necessaryForce := -game.seers[currentEnnemy] + 1
-				if necessaryForce > 0 {
-					if mine.pop > necessaryForce+10 {
-						necessaryForce += 10
-					} else if necessaryForce > mine.pop {
-						continue
-					}
-					moves = append(moves, [4]int{0, mine.id, currentEnnemy, necessaryForce})
-					game.troops[currentEnnemy] = append(game.troops[currentEnnemy], Troop{-1, game.playerID, mine.id, currentEnnemy, necessaryForce, game.distances[mine.id][currentEnnemy]})
-					mine.pop -= necessaryForce
+		if len(outwardFriends) == 0 && closestEnnemy != -1 {
+			necessaryForce := -game.seers[closestEnnemy][game.distances[mine.id][closestEnnemy]] + 1
+			if necessaryForce > 0 {
+				if mine.pop > necessaryForce+10 {
+					necessaryForce += 10
+				} else if necessaryForce > mine.pop {
+					necessaryForce = mine.pop
 				}
+				moves = append(moves, [4]int{0, mine.id, closestEnnemy, necessaryForce})
+				game.troops[closestEnnemy] = append(game.troops[closestEnnemy], Troop{-1, game.playerID, mine.id, closestEnnemy, necessaryForce, game.distances[mine.id][closestEnnemy]})
+				mine.pop -= necessaryForce
 			}
 		} else {
 			if mine.pop > len(outwardFriends) {
@@ -393,9 +363,6 @@ func main() {
 	actualGame.initializeProximities()
 
 	for {
-
-		// start := time.Now()
-
 		// entityCount: the number of entities (e.g. factories and troops)
 		var entityCount int
 		fmt.Scan(&entityCount)
@@ -405,7 +372,6 @@ func main() {
 		actualGame.theirFactories = actualGame.theirFactories[:0]
 		actualGame.troops = make(map[int][]Troop)
 		actualGame.bombs = make(map[int][]Bomb)
-		actualGame.score = 0
 
 		for i := 0; i < entityCount; i++ {
 			var entityID int
@@ -417,22 +383,15 @@ func main() {
 				if arg1 == 1 {
 					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100, 100}
 					actualGame.myFactories = append(actualGame.myFactories, &actualGame.factories[entityID])
-					actualGame.score += arg2
 				} else {
 					actualGame.factories[entityID] = Factory{entityID, arg1, arg2, arg3, arg4, 100, 100}
 					actualGame.theirFactories = append(actualGame.theirFactories, &actualGame.factories[entityID])
-					actualGame.score -= arg2
 				}
 				if arg2 > actualGame.highestPop {
 					actualGame.highestPop = arg2
 				}
 			} else if entityType == "TROOP" {
 				actualGame.troops[arg3] = append(actualGame.troops[arg3], Troop{entityID, arg1, arg2, arg3, arg4, arg5})
-				if arg1 == 1 {
-					actualGame.score += arg2
-				} else if arg1 == -1 {
-					actualGame.score -= arg2
-				}
 			} else if entityType == "BOMB" {
 				actualGame.bombs[arg3] = append(actualGame.bombs[arg3], Bomb{entityID, arg1, arg2, arg3, arg4})
 			}
@@ -470,8 +429,6 @@ func main() {
 			// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
 			fmt.Println("WAIT")
 		}
-		// elapsed := time.Since(start)
-		// fmt.Fprintln(os.Stderr, "Time:", elapsed)
 		actualGame.currentTurn++
 	}
 }
