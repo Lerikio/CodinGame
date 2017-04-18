@@ -34,6 +34,45 @@ func IDToCoord(i int) Point {
 	return Point{x, y}
 }
 
+func nextCase(x int, y int, d int) Point {
+	delta := Point{0, 0}
+	if d == 0 {
+		delta = Point{1, 0}
+	} else if d == 1 {
+		if y%2 == 0 {
+			delta = Point{0, -1}
+		} else {
+			delta = Point{1, -1}
+		}
+	} else if d == 2 {
+		if y%2 == 0 {
+			delta = Point{-1, -1}
+		} else {
+			delta = Point{0, -1}
+		}
+	} else if d == 3 {
+		delta = Point{-1, 0}
+	} else if d == 4 {
+		if y%2 == 0 {
+			delta = Point{-1, 1}
+		} else {
+			delta = Point{0, 1}
+		}
+	} else if d == 5 {
+		if y%2 == 0 {
+			delta = Point{0, 1}
+		} else {
+			delta = Point{1, 1}
+		}
+	}
+	newX := x + delta.x
+	newY := y + delta.y
+	if newX < 23 && newX > 0 && newY < 21 && newY > 0 {
+		return Point{newX, newY}
+	}
+	return Point{x, y}
+}
+
 /* Ship Class */
 type Ship struct {
 	x    int  // X coordinate
@@ -51,47 +90,52 @@ func (ship *Ship) closestBarrel(barrels *[]Point) Point {
 
 func (ship *Ship) nextPosition() Point {
 	result := Point{ship.x, ship.y}
-	delta := Point{0, 0}
-	if ship.d == 0 {
-		delta = Point{1, 0}
-	} else if ship.d == 1 {
-		if ship.y%2 == 0 {
-			delta = Point{0, -1}
-		} else {
-			delta = Point{1, -1}
-		}
-	} else if ship.d == 2 {
-		if ship.y%2 == 0 {
-			delta = Point{-1, -1}
-		} else {
-			delta = Point{0, -1}
-		}
-	} else if ship.d == 3 {
-		delta = Point{-1, 0}
-	} else if ship.d == 4 {
-		if ship.y%2 == 0 {
-			delta = Point{-1, 1}
-		} else {
-			delta = Point{0, 1}
-		}
-	} else if ship.d == 5 {
-		if ship.y%2 == 0 {
-			delta = Point{0, 1}
-		} else {
-			delta = Point{1, 1}
-		}
-	}
-
 	for i := 0; i < ship.s; i++ {
-		x := result.x + delta.x
-		y := result.y + delta.y
-		if x < 23 && x > 0 && y < 21 && y > 0 {
-			result.x = x
-			result.y = y
+		result = nextCase(result.x, result.y, ship.d)
+	}
+	return result
+}
+
+func (ship *Ship) possibleCollision(firingRange map[int]map[int]bool) []Point {
+	var result []Point
+	ghost := Ship{ship.x, ship.y, ship.d, ship.s, ship.mine, ship.id}
+	for k := 1; k <= 4; k++ {
+		nextPosition := ghost.nextPosition()
+		ghost.x = nextPosition.x
+		ghost.y = nextPosition.y
+		next := nextPosition.toID()
+		if firingRange[k][next] {
+			result = append(result, nextPosition)
 		}
 	}
-
 	return result
+}
+
+/*************** Breadth First Search *****************/
+func firingRange(start Point, breadth int) map[int]map[int]bool {
+	fringes := make(map[int]map[int]bool)
+	visited := make(map[int]bool)
+	visited[start.toID()] = true
+	fringes[0] = make(map[int]bool)
+	fringes[0][start.toID()] = true
+
+	for k := 1; k <= breadth; k++ {
+		if _, ok := fringes[1+k/3]; !ok {
+			fringes[1+k/3] = make(map[int]bool)
+		}
+		for start := range fringes[k/3] {
+			startP := IDToCoord(start)
+			for dir := 0; dir < 6; dir++ {
+				neighborP := nextCase(startP.x, startP.y, dir)
+				neighbor := neighborP.toID()
+				if !visited[neighbor] {
+					visited[neighbor] = true
+					fringes[1+k/3][neighbor] = true
+				}
+			}
+		}
+	}
+	return fringes
 }
 
 /*************** Main Function *****************/
@@ -161,12 +205,13 @@ func main() {
 				if !firing {
 					closest := Point{-1, -1}
 					smallest := 100000
+					explosions := firingRange(Point{this.x, this.y}, 10)
 					for _, ennemy := range enShips {
-						target := ennemy.nextPosition()
-						distance := distance(Point{this.x, this.y}, target)
-						if distance < 10 && distance < smallest {
-							smallest = distance
-							closest = target
+						collisions := ennemy.possibleCollision(explosions)
+						for _, collision := range collisions {
+							if distance(collision, Point{this.x, this.y}) < smallest {
+								closest = collision
+							}
 						}
 					}
 					if closest.x >= 0 {
@@ -178,27 +223,41 @@ func main() {
 			if firing {
 				hasAttacked[this.id] = true
 			} else {
-				closest := Point{this.x, this.y}
-				smallest := 10000
-				for _, barrel := range barrels {
-					distance := distance(Point{this.x, this.y}, IDToCoord(barrel))
-					if distance < smallest {
-						alreadyTargeted := false
-						for _, point := range targetedPosition {
-							if barrel == point {
-								alreadyTargeted = true
-								break
+				nextPosition := this.nextPosition()
+				if balls[2][nextPosition.toID()] {
+					if this.s == 2 {
+						fmt.Println("SLOWER")
+					} else {
+						fmt.Println("FASTER")
+					}
+				} else {
+					closest := Point{-1, -1}
+					smallest := 10000
+					for _, barrel := range barrels {
+						distance := distance(Point{this.x, this.y}, IDToCoord(barrel))
+						if distance < smallest {
+							alreadyTargeted := false
+							for _, point := range targetedPosition {
+								if barrel == point {
+									alreadyTargeted = true
+									break
+								}
+							}
+							if !alreadyTargeted {
+								closest = IDToCoord(barrel)
+								smallest = distance
 							}
 						}
-						if !alreadyTargeted {
-							closest = IDToCoord(barrel)
-							smallest = distance
-						}
 					}
+					hasAttacked[this.id] = false
+					if closest.x == -1 {
+						closest.x = enShips[0].x
+						closest.y = enShips[0].y
+					} else {
+						targetedPosition = append(targetedPosition, closest.toID())
+					}
+					fmt.Println("MOVE", closest.x, closest.y)
 				}
-				hasAttacked[this.id] = false
-				targetedPosition = append(targetedPosition, closest.toID())
-				fmt.Println("MOVE", closest.x, closest.y)
 			}
 
 			// fmt.Fprintln(os.Stderr, "Debug messages...")
