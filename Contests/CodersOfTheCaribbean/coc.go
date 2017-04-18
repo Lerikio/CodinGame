@@ -223,13 +223,26 @@ func main() {
 			if firing {
 				hasAttacked[this.id] = true
 			} else {
-				nextPosition := this.nextPosition()
-				if balls[2][nextPosition.toID()] {
+				ghost := Ship(this)
+				nextCenter := ghost.nextPosition()
+				ghost.x = nextCenter.x
+				ghost.y = nextCenter.y
+				nextFront := ghost.nextPosition()
+				nextBack := Point{this.x, this.y}
+				if balls[2][nextCenter.toID()] {
 					if this.s == 2 {
 						fmt.Println("SLOWER")
 					} else {
 						fmt.Println("FASTER")
 					}
+				} else if balls[2][nextFront.toID()] {
+					if entityCount%2 == 0 {
+						fmt.Println("PORT")
+					} else {
+						fmt.Println("STARBOARD")
+					}
+				} else if balls[2][nextBack.toID()] && this.s == 1 {
+					fmt.Println("FASTER")
 				} else {
 					closest := Point{-1, -1}
 					smallest := 10000
