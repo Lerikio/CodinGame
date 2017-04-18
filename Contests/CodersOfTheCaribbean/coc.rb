@@ -10,15 +10,31 @@ def next_position(ship)
   if ship.d == 0 then
     delta = Point.new(1, 0)
   elsif ship.d == 1 then
-    delta = Point.new(1, -1)
+    if ship.y % 2 == 0 then
+      delta = Point.new(0, -1)
+    else
+      delta = Point.new(1, -1)
+    end
   elsif ship.d == 2 then
-    delta = Point.new(0, -1)
+    if ship.y % 2 == 0 then
+      delta = Point.new(-1, -1)
+    else
+      delta = Point.new(0, -1)
+    end
   elsif ship.d == 3 then
     delta = Point.new(-1, 0)
   elsif ship.d == 4 then
-    delta = Point.new(0, 1)
+    if ship.y % 2 == 0 then
+      delta = Point.new(-1, 1)
+    else
+      delta = Point.new(0, 1)
+    end
   elsif ship.d == 5 then
-    delta = Point.new(1, 1)
+    if ship.y % 2 == 0 then
+      delta = Point.new(0, 1)
+    else
+      delta = Point.new(1, 1)
+    end
   end
 
   ship.s.times do
