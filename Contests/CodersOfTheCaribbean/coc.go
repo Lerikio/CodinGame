@@ -89,6 +89,7 @@ func main() {
 		var enShips []Ship
 		var barrels []Point
 		var mines []Point
+		var targetedPosition []Point
 		balls := make(map[int][]Point)
 
 		// myShipCount: the number of remaining ships
@@ -123,10 +124,25 @@ func main() {
 			firing := false
 			if !hasAttacked[this.id] {
 				for _, mine := range mines {
-					if distance(Point{this.x, this.y}, mine) < 10 {
-						firing = true
-						fmt.Println("FIRE", mine.x, mine.y)
-						break
+					distance := distance(Point{this.x, this.y}, mine)
+					if distance > 2 && distance < 10 {
+						alreadyDestroyed := false
+						for _, array := range balls {
+							for _, target := range array {
+								if target.x == mine.x && target.y == mine.y {
+									alreadyDestroyed = true
+									break
+								}
+							}
+							if alreadyDestroyed {
+								break
+							}
+						}
+						if !alreadyDestroyed {
+							firing = true
+							fmt.Println("FIRE", mine.x, mine.y)
+							break
+						}
 					}
 				}
 				if !firing {
@@ -149,16 +165,26 @@ func main() {
 			if firing {
 				hasAttacked[this.id] = true
 			} else {
-				closest := Point{-1, -1}
+				closest := Point{this.x, this.y}
 				smallest := 10000
 				for _, barrel := range barrels {
 					distance := distance(Point{this.x, this.y}, barrel)
 					if distance < smallest {
-						closest = barrel
-						smallest = distance
+						alreadyTargeted := false
+						for _, point := range targetedPosition {
+							if barrel.x == point.x && barrel.y == point.y {
+								alreadyTargeted = true
+								break
+							}
+						}
+						if !alreadyTargeted {
+							closest = barrel
+							smallest = distance
+						}
 					}
 				}
 				hasAttacked[this.id] = false
+				targetedPosition = append(targetedPosition, closest)
 				fmt.Println("MOVE", closest.x, closest.y)
 			}
 
