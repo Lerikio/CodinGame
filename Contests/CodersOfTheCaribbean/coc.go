@@ -20,6 +20,20 @@ func distance(a Point, b Point) int {
 	return (abs(a.x-b.x) + abs(a.x+a.y-b.x-b.y) + abs(a.y-b.y)) / 2
 }
 
+func coordToID(x int, y int) int {
+	return x*100 + y
+}
+
+func (a *Point) toID() int {
+	return a.x*100 + a.y
+}
+
+func IDToCoord(i int) Point {
+	x := i / 100
+	y := i % 100
+	return Point{x, y}
+}
+
 /* Ship Class */
 type Ship struct {
 	x    int  // X coordinate
@@ -87,10 +101,10 @@ func main() {
 	for {
 		var myShips []Ship
 		var enShips []Ship
-		var barrels []Point
-		var mines []Point
-		var targetedPosition []Point
-		balls := make(map[int][]Point)
+		var barrels []int
+		var mines []int
+		var targetedPosition []int
+		balls := make(map[int]map[int]bool)
 
 		// myShipCount: the number of remaining ships
 		var myShipCount int
@@ -112,11 +126,14 @@ func main() {
 					myShips = append(myShips, Ship{x, y, arg1, arg2, true, entityID})
 				}
 			} else if entityType == "BARREL" {
-				barrels = append(barrels, Point{x, y})
+				barrels = append(barrels, coordToID(x, y))
 			} else if entityType == "CANNONBALL" {
-				balls[arg2] = append(balls[arg2], Point{x, y})
+				if _, ok := balls[arg2]; !ok {
+					balls[arg2] = make(map[int]bool)
+				}
+				balls[arg2][coordToID(x, y)] = true
 			} else if entityType == "MINE" {
-				mines = append(mines, Point{x, y})
+				mines = append(mines, coordToID(x, y))
 			}
 		}
 		for i := 0; i < myShipCount; i++ {
@@ -124,23 +141,19 @@ func main() {
 			firing := false
 			if !hasAttacked[this.id] {
 				for _, mine := range mines {
-					distance := distance(Point{this.x, this.y}, mine)
+					distance := distance(Point{this.x, this.y}, IDToCoord(mine))
 					if distance > 2 && distance < 10 {
 						alreadyDestroyed := false
 						for _, array := range balls {
-							for _, target := range array {
-								if target.x == mine.x && target.y == mine.y {
-									alreadyDestroyed = true
-									break
-								}
-							}
-							if alreadyDestroyed {
+							if array[mine] {
+								alreadyDestroyed = true
 								break
 							}
 						}
 						if !alreadyDestroyed {
 							firing = true
-							fmt.Println("FIRE", mine.x, mine.y)
+							minePoint := IDToCoord(mine)
+							fmt.Println("FIRE", minePoint.x, minePoint.y)
 							break
 						}
 					}
@@ -168,23 +181,23 @@ func main() {
 				closest := Point{this.x, this.y}
 				smallest := 10000
 				for _, barrel := range barrels {
-					distance := distance(Point{this.x, this.y}, barrel)
+					distance := distance(Point{this.x, this.y}, IDToCoord(barrel))
 					if distance < smallest {
 						alreadyTargeted := false
 						for _, point := range targetedPosition {
-							if barrel.x == point.x && barrel.y == point.y {
+							if barrel == point {
 								alreadyTargeted = true
 								break
 							}
 						}
 						if !alreadyTargeted {
-							closest = barrel
+							closest = IDToCoord(barrel)
 							smallest = distance
 						}
 					}
 				}
 				hasAttacked[this.id] = false
-				targetedPosition = append(targetedPosition, closest)
+				targetedPosition = append(targetedPosition, closest.toID())
 				fmt.Println("MOVE", closest.x, closest.y)
 			}
 
