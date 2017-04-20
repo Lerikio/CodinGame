@@ -10,6 +10,16 @@ func abs(a int) int {
 	return a
 }
 
+type Action int
+
+var Actions = [5]string{
+	"SLOWER",
+	"FASTER",
+	"PORT",
+	"STARBOARD",
+	"WAIT",
+}
+
 /* Point Class */
 type Point struct {
 	x int
@@ -83,8 +93,39 @@ type Ship struct {
 	id   int  // ID
 }
 
-func (ship *Ship) closestBarrel(barrels *[]Point) Point {
-	result := Point{0, 0}
+func futureShip(startID int, values [3]int, act Action) Ship {
+	point := IDToCoord(startID)
+	result := Ship{point.x, point.y, values[0], values[1], false, -1}
+	switch act {
+	case 0:
+		if result.s > 0 {
+			result.s--
+		}
+		arrival := result.nextPosition()
+		result.x = arrival.x
+		result.y = arrival.y
+	case 1:
+		if result.s < 2 {
+			result.s++
+		}
+		arrival := result.nextPosition()
+		result.x = arrival.x
+		result.y = arrival.y
+	case 2:
+		arrival := result.nextPosition()
+		result.x = arrival.x
+		result.y = arrival.y
+		result.d = (result.d + 1) % 6
+	case 3:
+		arrival := result.nextPosition()
+		result.x = arrival.x
+		result.y = arrival.y
+		result.d = (6 + result.d - 1) % 6
+	case 4:
+		arrival := result.nextPosition()
+		result.x = arrival.x
+		result.y = arrival.y
+	}
 	return result
 }
 
@@ -109,6 +150,54 @@ func (ship *Ship) possibleCollision(firingRange map[int]map[int]bool) []Point {
 		}
 	}
 	return result
+}
+
+func (ship *Ship) badPosition(turn int, mines map[int]bool, balls map[int]map[int]bool) bool {
+	result := false
+	front := nextCase(ship.x, ship.y, ship.d)
+	back := nextCase(ship.x, ship.y, (ship.d+3)%6)
+	positions := [3]int{back.toID(), coordToID(ship.x, ship.y), front.toID()}
+
+	for _, position := range positions {
+		if mines[position] || balls[turn][position] {
+			result = true
+			break
+		}
+	}
+	return result
+}
+
+func (ship *Ship) pathfinder(depth int, mines map[int]bool, balls map[int]map[int]bool) []map[int][3]int {
+	paths := make([]map[int][3]int, depth)
+	visited := make(map[int][2]int)
+	visited[coordToID(ship.x, ship.y)] = [2]int{ship.d, ship.s}
+	paths[0] = make(map[int][3]int)
+	paths[0][coordToID(ship.x, ship.y)] = [3]int{ship.d, ship.s, -1}
+
+	for k := 1; k <= depth; k++ {
+		paths[k] = make(map[int][3]int)
+		for startID, val := range paths[k-1] {
+			for act := range Actions {
+				ghost := futureShip(startID, val, Action(act))
+				ghostID := coordToID(ghost.x, ghost.y)
+				sameAsBefore := false
+				if _, ok := visited[ghostID]; ok &&
+					visited[ghostID][0] == ghost.d &&
+					visited[ghostID][1] == ghost.s {
+					sameAsBefore = true
+				}
+				if !sameAsBefore && !ghost.badPosition(k, mines, balls) {
+					if val[2] == -1 {
+						paths[k][ghostID] = [3]int{ghost.d, ghost.s, act}
+					} else {
+						paths[k][ghostID] = [3]int{ghost.d, ghost.s, val[2]}
+					}
+					visited[ghostID] = [2]int{ghost.d, ghost.s}
+				}
+			}
+		}
+	}
+	return paths
 }
 
 /*************** Breadth First Search *****************/
@@ -146,7 +235,7 @@ func main() {
 		var myShips []Ship
 		var enShips []Ship
 		var barrels []int
-		var mines []int
+		mines := make(map[int]bool)
 		var targetedPosition []int
 		balls := make(map[int]map[int]bool)
 
@@ -177,14 +266,14 @@ func main() {
 				}
 				balls[arg2][coordToID(x, y)] = true
 			} else if entityType == "MINE" {
-				mines = append(mines, coordToID(x, y))
+				mines[coordToID(x, y)] = true
 			}
 		}
 		for i := 0; i < myShipCount; i++ {
 			this := myShips[i]
 			firing := false
 			if !hasAttacked[this.id] {
-				for _, mine := range mines {
+				for mine := range mines {
 					distance := distance(Point{this.x, this.y}, IDToCoord(mine))
 					if distance > 2 && distance < 10 {
 						alreadyDestroyed := false
