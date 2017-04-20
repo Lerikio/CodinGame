@@ -1,6 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"math/rand"
+	"os"
+	"time"
+)
 
 /* Helpers **************************/
 func abs(a int) int {
@@ -89,13 +94,13 @@ type Ship struct {
 	y    int  // Y coordinate
 	d    int  // Direction
 	s    int  // Speed
+	r    int  // Rhum
 	mine bool // True if owned by me
 	id   int  // ID
 }
 
-func futureShip(startID int, values [3]int, act Action) Ship {
-	point := IDToCoord(startID)
-	result := Ship{point.x, point.y, values[0], values[1], false, -1}
+func (ship *Ship) futureShip(startID int, dir int, speed int, act Action) Ship {
+	result := Ship{ship.x, ship.y, dir, speed, ship.r, ship.mine, ship.id}
 	switch act {
 	case 0:
 		if result.s > 0 {
@@ -139,7 +144,7 @@ func (ship *Ship) nextPosition() Point {
 
 func (ship *Ship) possibleCollision(firingRange map[int]map[int]bool) []Point {
 	var result []Point
-	ghost := Ship{ship.x, ship.y, ship.d, ship.s, ship.mine, ship.id}
+	ghost := Ship{ship.x, ship.y, ship.d, ship.s, ship.r, ship.mine, ship.id}
 	for k := 1; k <= 4; k++ {
 		nextPosition := ghost.nextPosition()
 		ghost.x = nextPosition.x
@@ -152,11 +157,18 @@ func (ship *Ship) possibleCollision(firingRange map[int]map[int]bool) []Point {
 	return result
 }
 
-func (ship *Ship) badPosition(turn int, mines map[int]bool, balls map[int]map[int]bool) bool {
+func (ship *Ship) badPosition(turn int, mines map[int]bool, balls map[int]map[int]bool, act Action) bool {
 	result := false
 	front := nextCase(ship.x, ship.y, ship.d)
 	back := nextCase(ship.x, ship.y, (ship.d+3)%6)
-	positions := [3]int{back.toID(), coordToID(ship.x, ship.y), front.toID()}
+	previousFront := Point{front.x, front.y}
+	switch act {
+	case 2:
+		previousFront = nextCase(ship.x, ship.y, (ship.d+1)%6)
+	case 3:
+		previousFront = nextCase(ship.x, ship.y, (6+ship.d-1)%6)
+	}
+	positions := [4]int{back.toID(), coordToID(ship.x, ship.y), front.toID(), previousFront.toID()}
 
 	for _, position := range positions {
 		if mines[position] || balls[turn][position] {
@@ -167,18 +179,23 @@ func (ship *Ship) badPosition(turn int, mines map[int]bool, balls map[int]map[in
 	return result
 }
 
-func (ship *Ship) pathfinder(depth int, mines map[int]bool, balls map[int]map[int]bool) []map[int][3]int {
-	paths := make([]map[int][3]int, depth)
+func (ship *Ship) pathfinder(depth int, mines map[int]bool, balls map[int]map[int]bool) []map[int]int {
+	paths := make([]map[int][2]int, depth)
 	visited := make(map[int][2]int)
+	seen := make([]map[int]int, depth)
+	seen[0] = make(map[int]int)
+	seen[0][coordToID(ship.x, ship.y)] = -1
 	visited[coordToID(ship.x, ship.y)] = [2]int{ship.d, ship.s}
-	paths[0] = make(map[int][3]int)
-	paths[0][coordToID(ship.x, ship.y)] = [3]int{ship.d, ship.s, -1}
+	paths[0] = make(map[int][2]int)
+	paths[0][coordToID(ship.x, ship.y)] = [2]int{ship.d, ship.s}
 
-	for k := 1; k <= depth; k++ {
-		paths[k] = make(map[int][3]int)
+	for k := 1; k < depth; k++ {
+		paths[k] = make(map[int][2]int)
+		seen[k] = make(map[int]int)
+		atLeastOneSolution := false
 		for startID, val := range paths[k-1] {
 			for act := range Actions {
-				ghost := futureShip(startID, val, Action(act))
+				ghost := ship.futureShip(startID, val[0], val[1], Action(act))
 				ghostID := coordToID(ghost.x, ghost.y)
 				sameAsBefore := false
 				if _, ok := visited[ghostID]; ok &&
@@ -186,18 +203,29 @@ func (ship *Ship) pathfinder(depth int, mines map[int]bool, balls map[int]map[in
 					visited[ghostID][1] == ghost.s {
 					sameAsBefore = true
 				}
-				if !sameAsBefore && !ghost.badPosition(k, mines, balls) {
-					if val[2] == -1 {
-						paths[k][ghostID] = [3]int{ghost.d, ghost.s, act}
+				if !sameAsBefore && !ghost.badPosition(k, mines, balls, Action(act)) {
+					paths[k][ghostID] = [2]int{ghost.d, ghost.s}
+					front := nextCase(ghost.x, ghost.y, ghost.d)
+					back := nextCase(ghost.x, ghost.y, (ghost.d+3)%6)
+					if k == 1 {
+						seen[k][front.toID()] = act
+						seen[k][ghostID] = act
+						seen[k][back.toID()] = act
 					} else {
-						paths[k][ghostID] = [3]int{ghost.d, ghost.s, val[2]}
+						seen[k][front.toID()] = seen[k][startID]
+						seen[k][ghostID] = seen[k][startID]
+						seen[k][back.toID()] = seen[k][startID]
 					}
+					atLeastOneSolution = true
 					visited[ghostID] = [2]int{ghost.d, ghost.s}
 				}
 			}
 		}
+		if !atLeastOneSolution {
+			break
+		}
 	}
-	return paths
+	return seen
 }
 
 /*************** Breadth First Search *****************/
@@ -230,13 +258,13 @@ func firingRange(start Point, breadth int) map[int]map[int]bool {
 /*************** Main Function *****************/
 func main() {
 	/* Persistent Values */
-	hasAttacked := make(map[int]bool)
+	// hasAttacked := make(map[int]bool)
 	for {
 		var myShips []Ship
 		var enShips []Ship
 		var barrels []int
 		mines := make(map[int]bool)
-		var targetedPosition []int
+		targetedPosition := make(map[int]bool)
 		balls := make(map[int]map[int]bool)
 
 		// myShipCount: the number of remaining ships
@@ -254,9 +282,9 @@ func main() {
 			fmt.Scan(&entityID, &entityType, &x, &y, &arg1, &arg2, &arg3, &arg4)
 			if entityType == "SHIP" {
 				if arg4 == 0 {
-					enShips = append(enShips, Ship{x, y, arg1, arg2, false, entityID})
+					enShips = append(enShips, Ship{x, y, arg1, arg2, arg3, false, entityID})
 				} else {
-					myShips = append(myShips, Ship{x, y, arg1, arg2, true, entityID})
+					myShips = append(myShips, Ship{x, y, arg1, arg2, arg3, true, entityID})
 				}
 			} else if entityType == "BARREL" {
 				barrels = append(barrels, coordToID(x, y))
@@ -269,99 +297,79 @@ func main() {
 				mines[coordToID(x, y)] = true
 			}
 		}
-		for i := 0; i < myShipCount; i++ {
-			this := myShips[i]
-			firing := false
-			if !hasAttacked[this.id] {
-				for mine := range mines {
-					distance := distance(Point{this.x, this.y}, IDToCoord(mine))
-					if distance > 2 && distance < 10 {
-						alreadyDestroyed := false
-						for _, array := range balls {
-							if array[mine] {
-								alreadyDestroyed = true
-								break
-							}
-						}
-						if !alreadyDestroyed {
-							firing = true
-							minePoint := IDToCoord(mine)
-							fmt.Println("FIRE", minePoint.x, minePoint.y)
-							break
-						}
+
+		for index, this := range myShips {
+			fmt.Fprint(os.Stderr, "Ship n°", index, " : ")
+			paths := this.pathfinder(40, mines, balls)
+
+			closestBarrel := -1
+			smallestTurn := 100
+			for _, barrel := range barrels {
+				for turn, achievable := range paths {
+					if turn >= smallestTurn {
+						break
 					}
-				}
-				if !firing {
-					closest := Point{-1, -1}
-					smallest := 100000
-					explosions := firingRange(Point{this.x, this.y}, 10)
-					for _, ennemy := range enShips {
-						collisions := ennemy.possibleCollision(explosions)
-						for _, collision := range collisions {
-							if distance(collision, Point{this.x, this.y}) < smallest {
-								closest = collision
-							}
-						}
-					}
-					if closest.x >= 0 {
-						firing = true
-						fmt.Println("FIRE", closest.x, closest.y)
+
+					if _, exists := achievable[barrel]; exists && !targetedPosition[barrel] {
+						closestBarrel = barrel
+						smallestTurn = turn
 					}
 				}
 			}
-			if firing {
-				hasAttacked[this.id] = true
-			} else {
-				ghost := Ship(this)
-				nextCenter := ghost.nextPosition()
-				ghost.x = nextCenter.x
-				ghost.y = nextCenter.y
-				nextFront := ghost.nextPosition()
-				nextBack := Point{this.x, this.y}
-				if balls[2][nextCenter.toID()] {
-					if this.s == 2 {
-						fmt.Println("SLOWER")
-					} else {
-						fmt.Println("FASTER")
-					}
-				} else if balls[2][nextFront.toID()] {
-					if entityCount%2 == 0 {
-						fmt.Println("PORT")
-					} else {
-						fmt.Println("STARBOARD")
-					}
-				} else if balls[2][nextBack.toID()] && this.s == 1 {
-					fmt.Println("FASTER")
+			fmt.Fprint(os.Stderr, "Coordinates of closest barrel are: ", closestBarrel, ", ")
+			shouldAttack := false
+
+			if closestBarrel != -1 {
+				targetedPosition[closestBarrel] = true
+				act := Actions[paths[smallestTurn][closestBarrel]]
+				if act != "WAIT" {
+					fmt.Fprint(os.Stderr, "Action is: ", act, "\n")
+					fmt.Println(act)
 				} else {
-					closest := Point{-1, -1}
-					smallest := 10000
-					for _, barrel := range barrels {
-						distance := distance(Point{this.x, this.y}, IDToCoord(barrel))
-						if distance < smallest {
-							alreadyTargeted := false
-							for _, point := range targetedPosition {
-								if barrel == point {
-									alreadyTargeted = true
-									break
-								}
-							}
-							if !alreadyTargeted {
-								closest = IDToCoord(barrel)
-								smallest = distance
-							}
-						}
+					shouldAttack = true
+					fmt.Fprint(os.Stderr, "Should attack...\n")
+				}
+			} else {
+				rand.Seed(time.Now().UTC().UnixNano())
+				max := rand.Intn(len(paths[1]))
+				var act string
+				count := 0
+				for _, val := range paths[1] {
+					count++
+					if count == max {
+						act = Actions[val]
+						break
 					}
-					hasAttacked[this.id] = false
-					if closest.x == -1 {
-						closest.x = enShips[0].x
-						closest.y = enShips[0].y
-					} else {
-						targetedPosition = append(targetedPosition, closest.toID())
-					}
-					fmt.Println("MOVE", closest.x, closest.y)
+				}
+				if act != "WAIT" {
+					fmt.Fprint(os.Stderr, "Action is: ", act, "\n")
+					fmt.Println(act)
+				} else {
+					fmt.Fprint(os.Stderr, "Should attack...\n")
+					shouldAttack = true
 				}
 			}
 
+			if shouldAttack {
+				closest := Point{-1, -1}
+				smallest := 100000
+				explosions := firingRange(Point{this.x, this.y}, 10)
+				for _, ennemy := range enShips {
+					collisions := ennemy.possibleCollision(explosions)
+					for _, collision := range collisions {
+						if distance(collision, Point{this.x, this.y}) < smallest {
+							closest = collision
+						}
+					}
+				}
+				if closest.x >= 0 {
+					fmt.Fprint(os.Stderr, "ATTACK!")
+					fmt.Println("FIRE", closest.x, closest.y)
+				} else {
+					fmt.Fprint(os.Stderr, "\nWAIT\n")
+					fmt.Println("WAIT")
+				}
+			}
 			// fmt.Fprintln(os.Stderr, "Debug messages...")
 			//fmt.Printf("MOVE 11 10\n") // Any valid action, such as "WAIT" or "MOVE x y"
 		}
