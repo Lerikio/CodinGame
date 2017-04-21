@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 /* Helpers */
 func abs(a int) int {
@@ -189,7 +192,32 @@ func (g *Game) init() {
 }
 
 func (g *Game) initNext() Game {
-	return Game{g.turn + 1, g.firstAction, g.myShips, g.enShips, g.barrels, g.mines, g.balls}
+	bar := make(map[int]int)
+	min := make(map[int]bool)
+	bal := make(map[int]map[int]bool)
+	var mSh []Ship
+	var eSh []Ship
+	for i := range g.myShips {
+		mSh = append(mSh, g.myShips[i].copy())
+	}
+	for i := range g.enShips {
+		eSh = append(eSh, g.enShips[i].copy())
+	}
+	for k, v := range g.barrels {
+		bar[k] = v
+	}
+	for k, v := range g.mines {
+		min[k] = v
+	}
+	for k, v := range g.balls {
+		bal[k] = make(map[int]bool)
+		for ke, va := range v {
+			bal[k][ke] = va
+		}
+	}
+	// fmt.Fprintln(os.Stderr, "Turn: ", g.turn, ", Ships: ", len(g.myShips))
+	// fmt.Fprintln(os.Stderr, "Turn: ", g.turn+1, ", Ships: ", len(mSh))
+	return Game{g.turn + 1, g.firstAction, mSh, eSh, bar, min, bal}
 }
 
 func (g *Game) myScore() int {
@@ -235,27 +263,38 @@ func (g *Game) simulate(numberOfTurns int, allActions [][3]Action) [3]Action {
 	sims = [][]Game{[]Game{*g}}
 
 	for k := 1; k < numberOfTurns; k++ {
-		sims = append(sims, make([]Game, 10))
-		for _, prevG := range sims[k-1] {
+		for i := range sims[k-1] {
 			for index, act := range allActions {
-				if len(prevG.myShips) == 1 && index > 4 {
+				// fmt.Fprintln(os.Stderr, k, len(sims[k-1][i].myShips))
+				if (len(sims[k-1][i].myShips) == 1 && index > 4) ||
+					(len(sims[k-1][i].myShips) == 2 && index > 24) {
 					break
-				} else if len(prevG.myShips) == 2 && index > 24 {
-					break
-				}
-				nextGame := prevG.initNext()
-				nextGame.apply(act[:])
-				if k == 1 {
-					nextGame.firstAction = act
-				}
-				sims[k] = append(sims[k], nextGame)
-				if k == numberOfTurns-1 {
-					scores = append(scores, nextGame.myScore())
+				} else {
+					nextGame := sims[k-1][i].initNext()
+					// if len(nextGame.myShips) != len(g.myShips) {
+					// 	fmt.Fprintln(os.Stderr, k, ": lost ", len(g.myShips)-len(nextGame.myShips), " ships during COPY")
+					// }
+					// nextGame.apply(act[:])
+					// if len(nextGame.myShips) != len(g.myShips) {
+					// 	fmt.Fprintln(os.Stderr, k, ": lost ", len(g.myShips)-len(nextGame.myShips), " ships during APPLY")
+					// }
+					if k == 1 {
+						nextGame.firstAction = act
+					}
+					if len(sims) == k {
+						sims = append(sims, []Game{nextGame})
+					} else {
+						sims[k] = append(sims[k], nextGame)
+					}
+					if k == numberOfTurns-1 {
+						scores = append(scores, nextGame.myScore())
+					}
 				}
 			}
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, scores)
 	maximum := -1
 	max_i := -1
 	for i, score := range scores {
@@ -270,9 +309,6 @@ func (g *Game) simulate(numberOfTurns int, allActions [][3]Action) [3]Action {
 
 /*************** Main Function *****************/
 func main() {
-	/* Persistent Values */
-	// hasAttacked := make(map[int]bool)
-
 	// Compute all possible actions
 	var allActions [][3]Action
 	for i := range Actions {
@@ -308,7 +344,7 @@ func main() {
 				}
 			} else if entityType == "BARREL" {
 				cGame.barrels[coordToID(x, y)] = arg1
-			} else if entityType == "CANNONBALL" {
+			} else if entityType == "aCANNONBALL" {
 				if _, ok := cGame.balls[arg2]; !ok {
 					cGame.balls[arg2] = make(map[int]bool)
 				}
@@ -318,7 +354,7 @@ func main() {
 			}
 		}
 
-		actions := cGame.simulate(15, allActions)
+		actions := cGame.simulate(6, allActions)
 		for index := range cGame.myShips {
 			fmt.Println(Actions[int(actions[index])])
 		}
